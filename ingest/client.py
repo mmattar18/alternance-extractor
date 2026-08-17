@@ -83,6 +83,9 @@ class FranceTravailClient:
             headers = kwargs.pop("headers", {})
             headers["Authorization"] = f"Bearer {self._get_token()}"
             resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+            # France Travail's JSON responses don't declare a charset, so requests
+            # falls back to guessing (often wrong) for .text/.json(). We know it's UTF-8.
+            resp.encoding = "utf-8"
             self._last_call_at = time.monotonic()
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After", 2 * (attempt + 1)))
@@ -106,6 +109,9 @@ class FranceTravailClient:
         """One page of search results. Returns (body, content_range_dict)."""
         headers = {"Range": f"offres={range_start}-{range_end}"}
         resp = self._request("GET", f"{API_BASE}/offres/search", params=params, headers=headers)
+        if resp.status_code == 204:
+            # Valid query, zero matching offers.
+            return {"resultats": []}, {"first_index": 0, "last_index": -1, "max_results": 0}
         if resp.status_code not in (200, 206):
             raise FranceTravailError(f"search failed ({resp.status_code}): {resp.text[:500]}")
         body = resp.json() if resp.text else {"resultats": []}

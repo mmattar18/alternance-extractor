@@ -20,23 +20,19 @@ from __future__ import annotations
 import json
 import sys
 
+if sys.stdout.encoding is None or sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from dotenv import load_dotenv
 
 from client import FranceTravailClient
 
 CANDIDATE_KEYWORDS = [
-    "data scientist alternance",
-    "data analyst alternance",
-    "intelligence artificielle alternance",
-    "machine learning alternance",
     "data scientist stage",
     "stage intelligence artificielle",
-    "développeur alternance",
-    "assistant marketing alternance",
-    "alternance comptabilité",
-    "vendeur",
-    "chef de projet",
-    "infirmier",
+    "stagiaire data",
+    "stagiaire",
+    "stage",
 ]
 
 
