@@ -116,20 +116,20 @@ class JobPosting(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    title: str = Field(..., min_length=1)
-    company: Optional[str] = None
-    contract_type: Optional[ContractType] = None
-    duration_months: Optional[int] = Field(default=None, ge=1)
-    start_date: Optional[str] = None
-    location: Optional[str] = None
-    remote_policy: Optional[RemotePolicy] = None
-    required_skills: Optional[list[str]] = None
-    nice_to_have_skills: Optional[list[str]] = None
-    years_experience_min: Optional[int] = Field(default=None, ge=0)
-    education_level: Optional[str] = None
-    language_requirements: Optional[list[str]] = None
-    salary_range: Optional[str] = None
-    alternance_rhythm: Optional[str] = None
+    title: str = Field(..., min_length=1, description="Job title exactly as written in the posting.")
+    company: Optional[str] = Field(default=None, description="Employer name. null if anonymized or not stated.")
+    contract_type: Optional[ContractType] = Field(default=None, description="One of the enum values, or null if not stated/unclear.")
+    duration_months: Optional[int] = Field(default=None, ge=1, description="Contract/internship length in months. null if not stated. Never guess from typical durations.")
+    start_date: Optional[str] = Field(default=None, description="Start date as written (e.g. 'septembre 2026', 'dès que possible'). null if not stated.")
+    location: Optional[str] = Field(default=None, description="City/region as written. null if not stated.")
+    remote_policy: Optional[RemotePolicy] = Field(default=None, description="on_site, hybrid, or remote. null if not stated.")
+    required_skills: Optional[list[str]] = Field(default=None, description="Skills explicitly required. null if none are listed.")
+    nice_to_have_skills: Optional[list[str]] = Field(default=None, description="Skills explicitly described as a plus/bonus, not required. null if none.")
+    years_experience_min: Optional[int] = Field(default=None, ge=0, description="Minimum years of experience. 0 ONLY if the posting explicitly says no experience is required (e.g. 'débutant accepté'). null if experience is not mentioned at all — do not default to 0.")
+    education_level: Optional[str] = Field(default=None, description="Required education level as written (e.g. 'Bac+5', 'Master 2'). null if not stated.")
+    language_requirements: Optional[list[str]] = Field(default=None, description="Languages required, with level if given (e.g. 'Anglais courant'). null if none stated.")
+    salary_range: Optional[str] = Field(default=None, description="Salary/compensation as written, with currency/period if given. null if not stated in the text.")
+    alternance_rhythm: Optional[str] = Field(default=None, description="Apprenticeship rhythm (e.g. '3 semaines entreprise / 1 semaine école'). Only ever non-null when contract_type is alternance. null otherwise, or if alternance but rhythm isn't stated.")
 
     @model_validator(mode="before")
     @classmethod
