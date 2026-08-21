@@ -23,7 +23,7 @@ worse, silently skip ids (if one process's list omits a provider that's
 mid-run under a different list). Update it, then start all the provider
 processes fresh -- don't mix an old-list process with a new-list one.
 
-Run: python label/run_labelling.py [groq|groq2|gemini|openrouter|cerebras]   (default: groq)
+Run: python label/run_labelling.py [groq|groq2|groq3|gemini|openrouter|cerebras]   (default: groq)
 """
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ OUT_PATH = REPO_ROOT / "data" / "labelled" / "all_labelled.jsonl"
 PROVIDERS = {
     "groq": "groq_openai/gpt-oss-120b",
     "groq2": "groq2_openai/gpt-oss-120b",  # second Groq account, GROQ_API_KEY_2 -- own TPD quota
+    "groq3": "groq3_openai/gpt-oss-120b",  # third Groq account, GROQ_API_KEY_3 -- own TPD quota
     "gemini": None,       # resolved at runtime from GEMINI_MODEL
     "openrouter": None,   # resolved at runtime from OPENROUTER_MODEL
     "cerebras": None,     # resolved at runtime from CEREBRAS_MODEL
@@ -58,7 +59,12 @@ PROVIDERS = {
 # use, resets midnight UTC (see openrouter_client.py). Cerebras: free tier
 # now requires a verified payment method as of 2026-08-17 (see
 # cerebras_client.py) -- not set up. None of those three are running.
-ACTIVE_PROVIDERS = ("groq", "groq2")
+#
+# NOTE: changing the *number* of entries here changes the hash bucket for
+# EVERY posting_id, not just the new provider's -- unlike adding a provider
+# while keeping the count the same. All currently-running processes must be
+# restarted together after a change like this one, not just the new one.
+ACTIVE_PROVIDERS = ("groq", "groq2", "groq3")
 
 
 def partition(posting_id: str) -> str:
@@ -96,6 +102,10 @@ def main() -> None:
         from label.groq_client import GroqClient
         client = GroqClient(api_key=os.environ["GROQ_API_KEY_2"])
         labeller_tag = PROVIDERS["groq2"]
+    elif provider == "groq3":
+        from label.groq_client import GroqClient
+        client = GroqClient(api_key=os.environ["GROQ_API_KEY_3"])
+        labeller_tag = PROVIDERS["groq3"]
     elif provider == "gemini":
         from label.gemini_client import GeminiClient
         client = GeminiClient()
