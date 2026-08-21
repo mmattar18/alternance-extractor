@@ -15,6 +15,7 @@ since free-model availability changes; override with OPENROUTER_MODEL.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -83,7 +84,15 @@ class OpenRouterClient:
                 continue
             if resp.status_code != 200:
                 raise RuntimeError(f"OpenRouter request failed ({resp.status_code}): {resp.text[:500]}")
-            return resp.json()["choices"][0]["message"]["content"]
+            try:
+                return resp.json()["choices"][0]["message"]["content"]
+            except (ValueError, KeyError, IndexError):
+                # 200 status but a malformed/unexpected body -- seen from
+                # free-tier upstream routing quirks. Feed it through the
+                # same invalid-JSON retry path in extract() rather than
+                # crashing the whole labelling run on one bad response.
+                print(f"    [openrouter malformed response] {resp.text[:300]}", flush=True)
+                return json.dumps({"_openrouter_malformed_response": resp.text[:500]})
         raise RuntimeError("Gave up on OpenRouter request after repeated 429/5xx/network errors")
 
     def _post(self, messages: list[dict]):
