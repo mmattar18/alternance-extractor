@@ -73,9 +73,20 @@ class GroqClient:
             self._last_call_at = time.monotonic()
             if resp.status_code == 429:
                 wait = float(resp.headers.get("retry-after", 5 * (attempt + 1)))
+                # Visibility into *which* cap was hit (requests vs tokens, and
+                # whether it's a per-minute or per-day window) -- without this,
+                # a long wait here is indistinguishable from a hang.
+                print(
+                    f"    [429] retry-after={wait}s "
+                    f"reqs={resp.headers.get('x-ratelimit-remaining-requests')}/{resp.headers.get('x-ratelimit-limit-requests')} "
+                    f"tokens={resp.headers.get('x-ratelimit-remaining-tokens')}/{resp.headers.get('x-ratelimit-limit-tokens')} "
+                    f"body={resp.text[:200]}",
+                    flush=True,
+                )
                 time.sleep(wait)
                 continue
             if resp.status_code >= 500:
+                print(f"    [{resp.status_code}] {resp.text[:200]}", flush=True)
                 time.sleep(3 * (attempt + 1))
                 continue
             if resp.status_code != 200:
