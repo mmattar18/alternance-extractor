@@ -91,6 +91,13 @@ def main() -> None:
     provider = sys.argv[1] if len(sys.argv) > 1 else "groq"
     if provider not in PROVIDERS:
         raise SystemExit(f"unknown provider {provider!r}, expected one of {list(PROVIDERS)}")
+    # Mop-up mode: ignore partition() and take every not-yet-done posting,
+    # not just this provider's assigned slice. Use when one provider finishes
+    # its own share early and others are still slow/stuck -- may briefly
+    # duplicate a few in-flight ids with another still-running process
+    # (wasted call, harmless; already_labelled() is a startup snapshot, not
+    # re-checked per-row), which is an acceptable tradeoff for speed here.
+    mop_up = len(sys.argv) > 2 and sys.argv[2] == "all"
 
     load_dotenv()
     import os
@@ -121,9 +128,12 @@ def main() -> None:
 
     records = [json.loads(l) for l in RAW_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
     done = already_labelled()
-    todo = [r for r in records if r["posting_id"] not in done and partition(r["posting_id"]) == provider]
+    if mop_up:
+        todo = [r for r in records if r["posting_id"] not in done]
+    else:
+        todo = [r for r in records if r["posting_id"] not in done and partition(r["posting_id"]) == provider]
 
-    print(f"provider={provider} labeller={labeller_tag}")
+    print(f"provider={provider} labeller={labeller_tag} mop_up={mop_up}")
     print(f"{len(records)} total postings, {len(done)} already labelled, "
           f"{len(todo)} assigned to {provider} in this run")
 
