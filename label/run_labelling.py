@@ -48,6 +48,7 @@ PROVIDERS = {
     "groq": "groq_openai/gpt-oss-120b",
     "groq2": "groq2_openai/gpt-oss-120b",  # second Groq account, GROQ_API_KEY_2 -- own TPD quota
     "groq3": "groq3_openai/gpt-oss-120b",  # third Groq account, GROQ_API_KEY_3 -- own TPD quota
+    "groq4": "groq4_openai/gpt-oss-120b",  # fourth Groq account, GROQ_API_KEY_4 -- own TPD quota
     "gemini": None,       # resolved at runtime from GEMINI_MODEL
     "openrouter": None,   # resolved at runtime from OPENROUTER_MODEL
     "cerebras": None,     # resolved at runtime from CEREBRAS_MODEL
@@ -113,6 +114,10 @@ def main() -> None:
         from label.groq_client import GroqClient
         client = GroqClient(api_key=os.environ["GROQ_API_KEY_3"])
         labeller_tag = PROVIDERS["groq3"]
+    elif provider == "groq4":
+        from label.groq_client import GroqClient
+        client = GroqClient(api_key=os.environ["GROQ_API_KEY_4"])
+        labeller_tag = PROVIDERS["groq4"]
     elif provider == "gemini":
         from label.gemini_client import GeminiClient
         client = GeminiClient()
