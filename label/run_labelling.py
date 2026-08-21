@@ -9,13 +9,21 @@ Resumable: already-labelled posting_ids (by id present in the output file)
 are skipped on re-run, and each result is flushed immediately, so an
 interrupted run can just be restarted.
 
-Two providers can run at once against disjoint posting_ids (see partition()
-below) to get around Groq's per-account TPM cap using a second, separately-
-quota'd provider. Only Groq-labelled rows are eligible for the test set
-(enforced in select_test_set.py) so the Groq-baseline eval never scores a
-different model's output by accident.
+Multiple providers can run at once, each in its own process, against
+disjoint posting_ids (see partition() below) to get around any single
+provider's rate/quota cap. Only Groq-labelled rows are eligible for the test
+set (enforced in select_test_set.py) so the Groq-baseline eval never scores
+a different model's output by accident.
 
-Run: python label/run_labelling.py [groq|gemini]   (default: groq)
+IMPORTANT: ACTIVE_PROVIDERS below must list every provider you're actually
+running concurrently, in the same order, on every invocation -- partition()
+hashes posting_id against this exact list, so if two concurrently-running
+processes disagree on it, they can double-label (wasted calls, harmless) or
+worse, silently skip ids (if one process's list omits a provider that's
+mid-run under a different list). Update it, then start all the provider
+processes fresh -- don't mix an old-list process with a new-list one.
+
+Run: python label/run_labelling.py [groq|gemini|openrouter]   (default: groq)
 """
 from __future__ import annotations
 
@@ -38,18 +46,24 @@ OUT_PATH = REPO_ROOT / "data" / "labelled" / "all_labelled.jsonl"
 
 PROVIDERS = {
     "groq": "groq_openai/gpt-oss-120b",
-    "gemini": None,  # resolved at runtime from GEMINI_MODEL, since it's env-overridable
+    "gemini": None,       # resolved at runtime from GEMINI_MODEL
+    "openrouter": None,   # resolved at runtime from OPENROUTER_MODEL
 }
+
+# Whichever providers are actually being run concurrently right now.
+# Gemini is left out: its free-tier quota was exhausted almost immediately
+# (see label/gemini_client.py's docstring) and it isn't currently running.
+ACTIVE_PROVIDERS = ("groq", "openrouter")
 
 
 def partition(posting_id: str) -> str:
-    """Deterministic ~50/50 split, by posting_id hash rather than list order
-    (postings.jsonl is bucketed sequentially by fetch keyword -- an order-
-    based split would starve one provider of certain buckets). Both provider
-    processes compute this independently and never touch the other's ids, so
-    there's no coordination needed between them."""
+    """Deterministic split across ACTIVE_PROVIDERS, by posting_id hash rather
+    than list order (postings.jsonl is bucketed sequentially by fetch
+    keyword -- an order-based split would starve one provider of certain
+    buckets). Every concurrently-running process computes this the same way
+    from the same ACTIVE_PROVIDERS, so there's no coordination needed."""
     digest = hashlib.sha256(posting_id.encode("utf-8")).hexdigest()
-    return "groq" if int(digest, 16) % 2 == 0 else "gemini"
+    return ACTIVE_PROVIDERS[int(digest, 16) % len(ACTIVE_PROVIDERS)]
 
 
 def already_labelled() -> set[str]:
@@ -68,15 +82,19 @@ def main() -> None:
         raise SystemExit(f"unknown provider {provider!r}, expected one of {list(PROVIDERS)}")
 
     load_dotenv()
+    import os
     if provider == "groq":
         from label.groq_client import GroqClient
         client = GroqClient()
         labeller_tag = PROVIDERS["groq"]
-    else:
-        import os
+    elif provider == "gemini":
         from label.gemini_client import GeminiClient
         client = GeminiClient()
         labeller_tag = f"gemini_{os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')}"
+    else:
+        from label.openrouter_client import OpenRouterClient
+        client = OpenRouterClient()
+        labeller_tag = f"openrouter_{os.environ.get('OPENROUTER_MODEL', 'openai/gpt-oss-20b:free')}"
 
     records = [json.loads(l) for l in RAW_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
     done = already_labelled()
