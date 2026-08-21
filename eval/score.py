@@ -9,6 +9,16 @@ List fields (required_skills, nice_to_have_skills, language_requirements) are
 compared as case-insensitive sets, since order was never part of the schema's
 contract.
 
+Free-text fields (education_level, salary_range, start_date,
+alternance_rhythm) are compared after normalizing case, punctuation, and
+"ou"/"et"/"and"/"or" connectors -- these fields have no single canonical
+short form (unlike an enum or "BTS SIO"), so both the gold correction and a
+model's answer can be equivalent in meaning but differ in exactly how they
+list/join multiple options ("diplome d'ingenieur ou d'ecole de commerce" vs
+"diplome d'ingenieur, ecole de commerce"). Fields with a real canonical form
+(title, company, enums, numbers) stay exact-match on purpose -- normalizing
+those away would hide genuine extraction errors, not cosmetic ones.
+
 Run the smoke tests: python eval/score.py
 Score a run:          python eval/score.py data/test/test.jsonl data/test/test_candidates.jsonl
   (test_candidates.jsonl doubles as the Groq-baseline predictions file --
@@ -18,6 +28,7 @@ Score a run:          python eval/score.py data/test/test.jsonl data/test/test_c
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -29,6 +40,23 @@ from schema.posting import JobPosting  # noqa: E402
 
 FIELDS = list(JobPosting.model_fields.keys())
 LIST_FIELDS = {"required_skills", "nice_to_have_skills", "language_requirements"}
+FREE_TEXT_FIELDS = {"education_level", "salary_range", "start_date", "alternance_rhythm"}
+
+_CONNECTOR_RE = re.compile(r"\b(ou|et|and|or)\b", re.IGNORECASE)
+# French elision (d'ecole, l'ecole, qu'il...) appears or disappears depending
+# on which connector precedes it ("ou d'ecole" vs ", ecole") -- same
+# formatting-not-substance issue as the connector itself, so strip it too.
+_ELISION_RE = re.compile(r"\b[dlcjnmst]'", re.IGNORECASE)
+_PUNCT_RE = re.compile(r"[,.;:]")
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_free_text(s: str) -> str:
+    s = s.lower()
+    s = _CONNECTOR_RE.sub(" ", s)
+    s = _ELISION_RE.sub(" ", s)
+    s = _PUNCT_RE.sub(" ", s)
+    return _WS_RE.sub(" ", s).strip()
 
 
 def _values_match(field: str, gold_value, pred_value) -> bool:
@@ -36,6 +64,8 @@ def _values_match(field: str, gold_value, pred_value) -> bool:
         gold_set = {v.strip().lower() for v in (gold_value or [])}
         pred_set = {v.strip().lower() for v in (pred_value or [])}
         return gold_set == pred_set
+    if field in FREE_TEXT_FIELDS:
+        return _normalize_free_text(gold_value) == _normalize_free_text(pred_value)
     return gold_value == pred_value
 
 
@@ -198,6 +228,34 @@ def test_list_field_mismatch_is_fp():
     gold = {"title": "x", "required_skills": ["Python"]}
     pred = {"title": "x", "required_skills": ["Python", "SQL"]}
     assert score_posting(gold, pred)["required_skills"] == "fp"
+
+
+def test_free_text_field_matches_despite_connector_and_punctuation_differences():
+    gold = {"title": "x", "education_level": "diplome ingenieur ou ecole de commerce"}
+    pred = {"title": "x", "education_level": "diplome ingenieur, ecole de commerce"}
+    assert score_posting(gold, pred)["education_level"] == "tp"
+
+
+def test_free_text_field_matches_despite_french_elision_shift():
+    # "ou d'ecole" vs ", ecole" -- the apostrophe-contraction shifts with the
+    # connector choice; that's still a formatting difference, not a real one.
+    gold = {"title": "x", "education_level": "diplome d'ingenieur ou d'ecole de commerce"}
+    pred = {"title": "x", "education_level": "diplome d'ingenieur, ecole de commerce"}
+    assert score_posting(gold, pred)["education_level"] == "tp"
+
+
+def test_free_text_field_still_catches_real_differences():
+    gold = {"title": "x", "education_level": "Bac+5"}
+    pred = {"title": "x", "education_level": "Bac+3"}
+    assert score_posting(gold, pred)["education_level"] == "fp"
+
+
+def test_non_free_text_scalar_field_stays_exact_match():
+    # title is not in FREE_TEXT_FIELDS -- a connector/punctuation difference
+    # there is a real error, not something to normalize away.
+    gold = {"title": "Data Analyst ou Ingenieur"}
+    pred = {"title": "Data Analyst, Ingenieur"}
+    assert score_posting(gold, pred)["title"] == "fp"
 
 
 def test_aggregate_exact_match_and_json_validity():
