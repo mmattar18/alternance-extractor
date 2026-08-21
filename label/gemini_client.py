@@ -62,16 +62,21 @@ class GeminiClient:
     def _generate(self, contents: list[dict]) -> str:
         for attempt in range(5):
             self._throttle()
-            resp = requests.post(
-                API_URL,
-                params={"key": self.api_key},
-                json={
-                    "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-                    "contents": contents,
-                    "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
-                },
-                timeout=60,
-            )
+            try:
+                resp = requests.post(
+                    API_URL,
+                    params={"key": self.api_key},
+                    json={
+                        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                        "contents": contents,
+                        "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
+                    },
+                    timeout=60,
+                )
+            except requests.exceptions.RequestException as e:
+                print(f"    [gemini network error] {e}", flush=True)
+                time.sleep(3 * (attempt + 1))
+                continue
             self._last_call_at = time.monotonic()
             if resp.status_code == 429:
                 wait = float(resp.headers.get("retry-after", 5 * (attempt + 1)))
@@ -92,7 +97,7 @@ class GeminiClient:
                 # schema violation so it goes through the same retry-with-
                 # corrected-JSON path as any other invalid output.
                 return json.dumps({"_gemini_empty_response": data})
-        raise RuntimeError("Gave up on Gemini request after repeated 429/5xx")
+        raise RuntimeError("Gave up on Gemini request after repeated 429/5xx/network errors")
 
     def extract(self, raw_text: str) -> GeminiExtractionResult:
         start = time.monotonic()

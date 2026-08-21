@@ -62,23 +62,15 @@ class OpenRouterClient:
     def _chat(self, messages: list[dict]) -> str:
         for attempt in range(5):
             self._throttle()
-            resp = requests.post(
-                API_URL,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    # Optional per OpenRouter docs, harmless either way.
-                    "HTTP-Referer": "https://github.com/mmattar18/alternance-extractor",
-                    "X-Title": "alternance-extractor",
-                },
-                json={
-                    "model": MODEL,
-                    "messages": messages,
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=60,
-            )
+            try:
+                resp = self._post(messages)
+            except requests.exceptions.RequestException as e:
+                # Transient network fault (dropped connection, truncated
+                # response, timeout, DNS blip) -- retry like a 5xx rather
+                # than letting it crash the whole labelling run.
+                print(f"    [openrouter network error] {e}", flush=True)
+                time.sleep(3 * (attempt + 1))
+                continue
             self._last_call_at = time.monotonic()
             if resp.status_code == 429:
                 wait = float(resp.headers.get("retry-after", 5 * (attempt + 1)))
@@ -92,7 +84,26 @@ class OpenRouterClient:
             if resp.status_code != 200:
                 raise RuntimeError(f"OpenRouter request failed ({resp.status_code}): {resp.text[:500]}")
             return resp.json()["choices"][0]["message"]["content"]
-        raise RuntimeError("Gave up on OpenRouter request after repeated 429/5xx")
+        raise RuntimeError("Gave up on OpenRouter request after repeated 429/5xx/network errors")
+
+    def _post(self, messages: list[dict]):
+        return requests.post(
+            API_URL,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                # Optional per OpenRouter docs, harmless either way.
+                "HTTP-Referer": "https://github.com/mmattar18/alternance-extractor",
+                "X-Title": "alternance-extractor",
+            },
+            json={
+                "model": MODEL,
+                "messages": messages,
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=60,
+        )
 
     def extract(self, raw_text: str) -> OpenRouterExtractionResult:
         start = time.monotonic()
