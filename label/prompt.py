@@ -119,3 +119,15 @@ def build_messages(raw_text: str) -> list[dict]:
         messages.append({"role": "assistant", "content": json.dumps(example_json, ensure_ascii=False)})
     messages.append({"role": "user", "content": raw_text})
     return messages
+
+
+def build_gemini_contents(raw_text: str) -> list[dict]:
+    """Same few-shot examples as build_messages(), reshaped for Gemini's API:
+    no system role inside `contents` (SYSTEM_PROMPT goes in the separate
+    system_instruction field instead) and 'model' instead of 'assistant'."""
+    contents = []
+    for example_text, example_json in _FEWSHOT_EXAMPLES:
+        contents.append({"role": "user", "parts": [{"text": example_text}]})
+        contents.append({"role": "model", "parts": [{"text": json.dumps(example_json, ensure_ascii=False)}]})
+    contents.append({"role": "user", "parts": [{"text": raw_text}]})
+    return contents

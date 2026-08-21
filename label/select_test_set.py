@@ -5,9 +5,19 @@ data_ai_stage — only 2 postings exist total, too few to hold any out and
 still leave train with useful signal, so both stay in train; documented as a
 limitation, not silently dropped). Selection is seeded for reproducibility.
 
-Train set: everything not selected for test, using the Groq prediction as
-the label — but only where Groq produced valid JSON. Postings where Groq
-failed are dropped from train and counted, not silently discarded.
+Test-candidate pool is restricted to rows labelled by Groq specifically
+(`labeller` starting with "groq"; rows from before that field existed are
+treated as Groq too, since Groq was the only labeller at the time). If a
+second provider (e.g. Gemini, see run_labelling.py) helped label some
+postings, its rows can still be used for training but must never end up as
+a "Groq baseline" prediction in eval/score.py -- that would silently corrupt
+the baseline comparison the whole project is built around.
+
+Train set: everything not selected for test, using each row's own
+`prediction` as the label — but only where the labeller produced valid
+JSON. Postings where extraction failed are dropped from train and counted,
+not silently discarded. Train set is not restricted to Groq -- a second
+provider's labels add noisy-but-usable training signal.
 
 Enforces schema.dedupe.assert_no_test_leakage between the two splits before
 writing anything, exactly at the point where the split is created.
@@ -55,12 +65,18 @@ def proportional_allocation(bucket_sizes: dict[str, int], total: int) -> dict[st
     return floors
 
 
+def is_groq(record: dict) -> bool:
+    return record.get("labeller", "groq_openai/gpt-oss-120b").startswith("groq")
+
+
 def main() -> None:
     records = [json.loads(l) for l in LABELLED_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
-    print(f"{len(records)} labelled postings loaded")
+    groq_pool = [r for r in records if is_groq(r)]
+    print(f"{len(records)} labelled postings loaded ({len(groq_pool)} Groq-labelled, "
+          f"eligible for the test set)")
 
     by_bucket: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
+    for r in groq_pool:
         by_bucket[r["bucket"]].append(r)
 
     bucket_sizes = {b: len(rs) for b, rs in by_bucket.items()}
@@ -103,7 +119,7 @@ def main() -> None:
 
     print(f"\nTest candidates: {len(test_records)} -> {TEST_CANDIDATES_PATH.relative_to(REPO_ROOT)}")
     print(f"Train set: {len(train_records)} -> {TRAIN_PATH.relative_to(REPO_ROOT)} "
-          f"({dropped_invalid} dropped: Groq produced invalid JSON)")
+          f"({dropped_invalid} dropped: labeller produced invalid JSON)")
     print("Test bucket composition:", Counter(r["bucket"] for r in test_records))
 
 
