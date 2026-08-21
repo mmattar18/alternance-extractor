@@ -23,7 +23,7 @@ worse, silently skip ids (if one process's list omits a provider that's
 mid-run under a different list). Update it, then start all the provider
 processes fresh -- don't mix an old-list process with a new-list one.
 
-Run: python label/run_labelling.py [groq|gemini|openrouter]   (default: groq)
+Run: python label/run_labelling.py [groq|groq2|gemini|openrouter|cerebras]   (default: groq)
 """
 from __future__ import annotations
 
@@ -46,14 +46,19 @@ OUT_PATH = REPO_ROOT / "data" / "labelled" / "all_labelled.jsonl"
 
 PROVIDERS = {
     "groq": "groq_openai/gpt-oss-120b",
+    "groq2": "groq2_openai/gpt-oss-120b",  # second Groq account, GROQ_API_KEY_2 -- own TPD quota
     "gemini": None,       # resolved at runtime from GEMINI_MODEL
     "openrouter": None,   # resolved at runtime from OPENROUTER_MODEL
+    "cerebras": None,     # resolved at runtime from CEREBRAS_MODEL
 }
 
 # Whichever providers are actually being run concurrently right now.
-# Gemini is left out: its free-tier quota was exhausted almost immediately
-# (see label/gemini_client.py's docstring) and it isn't currently running.
-ACTIVE_PROVIDERS = ("groq", "openrouter")
+# Gemini: free-tier quota exhausted almost immediately (see gemini_client.py).
+# OpenRouter: free tier is 50 requests/day total, exhausted after ~30min of
+# use, resets midnight UTC (see openrouter_client.py). Cerebras: free tier
+# now requires a verified payment method as of 2026-08-17 (see
+# cerebras_client.py) -- not set up. None of those three are running.
+ACTIVE_PROVIDERS = ("groq", "groq2")
 
 
 def partition(posting_id: str) -> str:
@@ -87,14 +92,22 @@ def main() -> None:
         from label.groq_client import GroqClient
         client = GroqClient()
         labeller_tag = PROVIDERS["groq"]
+    elif provider == "groq2":
+        from label.groq_client import GroqClient
+        client = GroqClient(api_key=os.environ["GROQ_API_KEY_2"])
+        labeller_tag = PROVIDERS["groq2"]
     elif provider == "gemini":
         from label.gemini_client import GeminiClient
         client = GeminiClient()
         labeller_tag = f"gemini_{os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')}"
-    else:
+    elif provider == "openrouter":
         from label.openrouter_client import OpenRouterClient
         client = OpenRouterClient()
         labeller_tag = f"openrouter_{os.environ.get('OPENROUTER_MODEL', 'openai/gpt-oss-20b:free')}"
+    else:
+        from label.cerebras_client import CerebrasClient
+        client = CerebrasClient()
+        labeller_tag = f"cerebras_{os.environ.get('CEREBRAS_MODEL', 'llama-3.3-70b')}"
 
     records = [json.loads(l) for l in RAW_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
     done = already_labelled()
