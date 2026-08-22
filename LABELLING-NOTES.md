@@ -6,17 +6,25 @@ Running log of problems found and decisions made while hand-correcting
 it exists so decisions don't get re-litigated or made inconsistently across
 sessions.
 
-Last updated: 2026-08-22. Test-set progress: **100/100 corrected — test set is DONE.**
-
-The first 27 were corrected by hand, screen by screen, via `label/review_server.py`.
-The remaining 73 were corrected by a forked agent applying the same rules
-documented in this file (all 100 re-validated against `schema.posting.JobPosting`
-afterward — 0 failures). Groq baseline scored against the finished set:
-`macro_f1 = 0.893`, `exact_match_rate = 35.0%` (run:
+Last updated: 2026-08-22. Test-set progress: **100/100 corrected — test set is DONE**,
+and a second cleanup pass has already gone over the ambiguous edge cases (see
+"Second-pass cleanup" section below). `train.jsonl` has also had two rounds of
+targeted fixes (duration ranges, intérim contract_type) — see "train.jsonl fixes"
+section below for the full history. Current baseline, after all fixes:
+`macro_f1 = 0.891`, `exact_match_rate = 34.0%` (run:
 `python eval/score.py data/test/test.jsonl data/test/test_candidates.jsonl`).
 Weakest fields by far: `required_skills` (F1 0.565, precision 0.453 — Groq
 massively overgenerates) and `duration_months` (F1 0.757, recall 0.609 — the
-range-to-null pattern below).
+range-to-null pattern below). The small macro_f1 drop from the original 0.893
+is expected and *correct*, not a regression — it comes from nulling out 4
+`company`/`years_experience_min` values Groq had happened to guess right
+without real textual support (hallucination corrections make the baseline
+score more honest, not higher).
+
+The first 27 test-set postings were corrected by hand, screen by screen, via
+`label/review_server.py`. The remaining 73 were corrected by a forked agent
+applying the same rules documented in this file (all 100 re-validated against
+`schema.posting.JobPosting` — 0 failures, both times).
 
 ## Conventions established (apply these when reviewing)
 
@@ -72,24 +80,98 @@ to fight formatting noise that isn't a real extraction error)
 - Both changes are covered by smoke tests in `eval/score.py` — run
   `python eval/score.py` (no args) after touching the scoring logic.
 
-## `data/train/train.jsonl` fix applied (commit `fd656ad`)
+## `data/train/train.jsonl` fixes (two rounds)
 
-Groq's own labels (used directly as training targets) leave
-`duration_months` null on every posting where the text states a duration
-*range* rather than a single number — confirmed 10/10 range-postings in
-train had this. Left uncorrected, Qwen would learn "range in text → leave
-blank," which is exactly the behavior the hand-corrected test set now
-penalizes (minimum-of-range convention above). Backfilled 9 of the 10 rows
-with the minimum; skipped `france_travail:212DXSR` because its range
-("18/24 mois") describes the BTS diploma length, not an explicitly stated
-contract duration — didn't want to force an inference the text doesn't
-actually make.
+**Round 1 (commit `fd656ad`)**: Groq's own labels (used directly as
+training targets) leave `duration_months` null on every posting where the
+text states a duration *range* rather than a single number — confirmed
+10/10 range-postings matching the narrow pattern "X à/-/et Y mois" had
+this. Backfilled 9 of the 10 with the minimum; skipped
+`france_travail:212DXSR` because its range ("18/24 mois") describes the
+BTS diploma length, not an explicitly stated contract duration.
+
+**Round 2 (broader sweep, not yet committed as of this note)**: widened
+the regex to also catch "ans" (years) and the connector "ou" — 27
+additional candidate rows surfaced. Reading each in context: only **6
+were real durations** and got patched (minimum-of-range, converting years
+to months): `3941310`, `211XVYS`, `0990762`, `211XRYY`, `211ZCKW`,
+`211PXYT`. The other 21 were false positives the wider regex
+mis-triggered on — **13 were "years of experience required" ranges**
+(e.g. "2 à 3 ans d'expérience"), **6 were age brackets** that have
+nothing to do with contract length (a care facility's client ages, the
+alternance 16–29 candidate-eligibility clause, a kids'-program age
+range), and 2 more were diploma/formation-length framing (same category
+as the already-skipped `212DXSR`). **Lesson: a wider regex on this
+dataset finds far more false positives than true positives once "ans" is
+included — always read context before patching, don't trust the match
+alone.**
+
+**Also fixed in round 2**: the "intérim" `contract_type` schema gap (see
+below) — 11/28 candidate rows patched (7 null/other→cdd on explicit
+intérim/temp-replacement signals, 4 cdi→null where the only intérim
+mention was the staffing agency's own generic self-description rather
+than a statement about that specific posting — nulled per the
+no-hallucination rule, since "the employer happens to be a temp agency"
+doesn't mean "this posting is a temp assignment"). 17 of the 28 left
+unchanged (already correct, or insufficient evidence to override "no
+explicit statement → null").
 
 **If more training rows turn out to have this or a similar
 gap-between-Groq's-habits-and-the-gold-convention problem, patch
 `train.jsonl` the same way before fine-tuning, not after** — the whole
 point is Qwen's training labels should reflect the same conventions the
 test set is scored against.
+
+## "Intérim" contract_type schema gap — RESOLVED
+
+`schema/posting.py`'s `_CONTRACT_SYNONYMS` had no French entry for
+intérim/temp work, so any such raw string silently fell through to
+`"other"`. Added `intérim`/`interim`/`intérimaire`/`interimaire`/`mission
+d'intérim`/`mission d'interim`/`travail temporaire`/`temporaire` → `"cdd"`
+(closest legal fit: intérim is a fixed-term arrangement via a staffing
+agency). This is a schema.py change, not just a data patch — future Groq
+runs and the fine-tuned model both benefit from it automatically. The
+already-stored `train.jsonl` predictions needed a separate manual patch
+(round 2 above) since they'd already been normalized through the old,
+gapped mapping and the original raw string was lost.
+
+## Second-pass cleanup on `data/test/test.jsonl` (6 rows changed)
+
+Revisited the judgment calls flagged as uncertain after the 73-posting
+batch, re-reading each against `test_candidates.jsonl`'s raw_text:
+
+- `france_travail:5201009` and `france_travail:5684960`: `company:
+  "ISCOD"` → null. These were the same broker-not-employer bug as the
+  Sélestat CRM posting fixed by hand earlier in the session — turned out
+  only that one had actually been corrected; two more slipped through in
+  the 73-posting batch.
+- `france_travail:212BPNY`: `company: "NGE"` → `"GUINTOLI"`. The raw_text
+  header says NGE (the parent group) but the body explicitly says "Notre
+  entité GUINTOLI... est à la recherche" — GUINTOLI is the actual hiring
+  subsidiary.
+- `france_travail:5780538`: `company: "Burger King"` → null. Text says
+  "sous la supervision du franchisé" — Burger King is the brand, the
+  actual franchisee/legal employer is never named. (The *other* Burger
+  King posting in the test set keeps its `BKG` company value as-is —
+  that one names a specific header entity, a genuinely different
+  situation, not the same bug.)
+- `france_travail:211WRFK` and `france_travail:211SCDM`:
+  `years_experience_min: 0` → null. Text said a specific type of
+  experience "n'est pas obligatoire" (not that no experience at all is
+  required) — softer than "débutant accepté", and the nuance is already
+  captured in `nice_to_have_skills`, so forcing `0` overstated it.
+
+Spot-checked and confirmed already correct, no changes needed: the
+agency-vs-broker `company` distinction (Adecco/Manpower/Randstad/
+Synergie/Proman/Davidson/Holenek/LIP all recruit under explicit "pour
+notre client"/temp-contract framing, confirming agency-as-legal-employer
+was the right call), AKAMANMAN (correctly null), FINAPOLLINE/ACTEON (kept
+ACTEON — body speaks in first person as ACTEON), CAF Marne (no
+truncation bug, already clean), redundant-language-in-skills pattern
+(searched broadly, none found beyond the Inserm case already fixed
+during manual review), company/location field-swap bugs (searched
+broadly, none found beyond the Petit-Quevilly one already fixed by
+hand).
 
 ## Judgment calls from the 73-posting batch worth a second look
 
@@ -101,18 +183,16 @@ test set is scored against.
   out per the broker-vs-employer rule above. The line between the two
   categories was inferred from firm-name patterns, not certain in every
   case.
-- Ambiguous company identity, resolved by best judgment, not certainty:
-  NGE vs GUINTOLI (kept NGE); FINAPOLLINE vs ACTEON (went with ACTEON);
-  two Burger King postings named inconsistently (BKG vs "Burger King");
-  FONDAT REGION OUEST LIGUE CANCER vs Oncobretagne (kept the header
-  name); AKAMANMAN nulled after re-reading it as just the "site client"
-  for an unnamed actual employer.
-- `years_experience_min = 0` was applied to "n'est pas obligatoire"
-  phrasing — looser than the schema docstring's literal "débutant
-  accepté" example. Worth confirming this reading is what you want.
-- `contract_type` for explicit "intérim" postings was standardized to
-  `"cdd"` (there's no better fit in the locked enum) — see schema gap
-  below, this is a workaround, not a schema fix.
+- ~~Ambiguous company identity~~ — **[RESOLVED, see "Second-pass cleanup"
+  below]** NGE was corrected to GUINTOLI and the ambiguous Burger King
+  row was nulled; FINAPOLLINE/ACTEON, FONDAT REGION OUEST LIGUE CANCER,
+  and AKAMANMAN were re-checked and confirmed already correct.
+- ~~`years_experience_min = 0` applied to "n'est pas obligatoire"~~ —
+  **[RESOLVED]** re-read as too soft a signal to quantify as 0; the two
+  affected rows were corrected to null (see "Second-pass cleanup").
+- ~~`contract_type` for "intérim" standardized to `"cdd"` as a
+  workaround~~ — **[RESOLVED]** this is now an actual schema fix, not a
+  workaround — see "Intérim contract_type schema gap — RESOLVED" below.
 - "Named skill" was extended beyond software to cover methodologies/
   certifications (Agile/Scrum, Cycle en V, DevOps, HACCP) and named trade
   specializations ("électrotechnicien", "maîtriser les cuissons des
@@ -128,19 +208,18 @@ test set is scored against.
   "Savoir-faire" header. This is the single biggest driver of the low
   required_skills F1 above — worth being extra vigilant on this field in
   any future spot-checks.
-- **Duration-range→null is more pervasive than the 9/10 `train.jsonl`
-  cases already patched** — hit ~7 more instances in the test set alone
-  ("X à Y mois", "X ou Y ans" phrasing). `train.jsonl` was only scanned
-  for the exact "X à/-/et Y mois" pattern — **worth a broader re-scan**
-  before fine-tuning (wider regex, and check year-based ranges too).
-- **Company/location field swaps distinct from the broker pattern**: raw
-  location string dumped into `company` (2 more instances beyond the
-  Petit-Quevilly one already fixed by hand), plus a truncated header with
-  a stray "— dept — city" suffix left inside `company` (CAF Marne
-  posting).
-- **Redundant language entries duplicated into skills fields** alongside
-  a correct `language_requirements` entry — one more instance beyond the
-  Inserm case already documented.
+- ~~Duration-range→null more pervasive than the 9/10 already patched~~ —
+  **[RESOLVED]** broader re-scan done, see "train.jsonl fixes" round 2
+  above (found the wider regex mostly over-triggers on unrelated "years
+  of X" and age-bracket phrasing — only 6 of 27 candidates were real).
+- ~~Company/location field swaps distinct from the broker pattern~~ —
+  **[CHECKED, not found]** re-searched broadly in the second-pass
+  cleanup; no additional instances beyond the Petit-Quevilly one already
+  fixed by hand, and the CAF Marne posting turned out to be clean (not a
+  truncation bug after all — matches the raw text as-is).
+- ~~Redundant language entries duplicated into skills fields~~ —
+  **[CHECKED, not found]** re-searched broadly; no instances beyond the
+  Inserm case already fixed during manual review.
 - **Salary boilerplate recurring far more than the 5 documented cases**,
   plus a real edge case for the eval fix: a posting stated payment
   "...sur 14 mois" (a payment-schedule detail, not a salary figure) —
@@ -163,23 +242,32 @@ test set is scored against.
   documented as locked in the README and this wasn't changed without
   asking first.
 
-## Open items / things to watch (test set is done — these are all about train.jsonl / next steps)
+## Open items / things to watch
 
-- **Test set is finished (100/100), not yet committed.** Next step is
-  yours: commit `data/test/test.jsonl`, then decide on the two open
-  items below before fine-tuning.
-- Re-scan `train.jsonl` more broadly for the duration-range→null pattern
-  — only the exact "X à/-/et Y mois" regex was checked (9/10 fixed,
-  commit `fd656ad`); the test-set pass found ~7 more range-phrasing
-  variants ("X ou Y ans" etc.) that a wider regex would likely also
-  catch in train.
+- **Test set is finished and cleaned up (100/100, two review passes).
+  `data/test/test.jsonl`, `data/train/train.jsonl`, and
+  `schema/posting.py` all have uncommitted/committed fixes as of this
+  note — check `git log`/`git status` for current state before assuming
+  anything below is still pending.**
+- `required_skills` overgeneration by Groq is the single biggest known
+  weakness in the baseline (F1 0.565) — this is a real finding about the
+  model being benchmarked, not a labelling problem, but worth remembering
+  when interpreting the fine-tuned model's score on this field too (a
+  fine-tuned model beating this specific weakness would be a genuinely
+  meaningful result to call out in the writeup).
 - `france_travail:212DXSR` in train.jsonl — `duration_months` still null,
-  manual call needed if you decide the BTS-length framing should count
-  after all.
-- Decide on the `_CONTRACT_SYNONYMS` / "intérim" schema gap above before
-  fine-tuning — it's a real, recurring French contract type the locked
-  schema currently can't represent cleanly.
+  manual call needed if you decide the BTS-length framing ("18/24 mois -
+  Bac+2") should count as a stated contract duration after all. Same
+  open question applies to the 2 similar diploma/formation-length rows
+  found and skipped in the round-2 duration sweep.
+- `eval/score.py`'s `_HAS_DIGIT_RE` salary_range heuristic isn't
+  foolproof — a posting stating payment terms like "...sur 14 mois" (a
+  payment-schedule detail) would slip past it and be treated as a real
+  salary figure since it contains a digit. Not yet hit in practice as a
+  scoring error, just a known blind spot.
 - One-off data artifact, not worth chasing: `france_travail:212NRDB`'s
   raw_text has a stray standalone "user" line (looks like a leaked
   chat-role marker from ingest) — confirmed it's the only occurrence
   across all 642 labelled postings, so not a systemic pipeline bug.
+- Next real milestone per the README: `notebooks/kaggle_train.ipynb` (the
+  QLoRA fine-tune itself) — everything so far exists to feed that step.
