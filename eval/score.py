@@ -50,6 +50,20 @@ _ELISION_RE = re.compile(r"\b[dlcjnmst]'", re.IGNORECASE)
 _PUNCT_RE = re.compile(r"[,.;:]")
 _WS_RE = re.compile(r"\s+")
 
+# France Travail postings prefix location with the department code
+# ("62 - Vendin-le-Vieil"), inconsistently -- some postings have it, some
+# don't, for the same city. That's a France Travail formatting quirk, not a
+# real extraction difference, so location is compared with the prefix
+# stripped rather than requiring every gold row to have it removed by hand.
+_DEPT_PREFIX_RE = re.compile(r"^\s*(?:\d{2,3}|2[ab])\s*-\s*", re.IGNORECASE)
+
+# Apprenticeship postings routinely say pay "follows the legal SMIC
+# percentage by age/education level" without ever giving an actual number --
+# that boilerplate carries no more information than not mentioning salary at
+# all, so a salary_range with no digit in it is treated as equivalent to
+# null on both sides, rather than requiring every gold row to be hand-blanked.
+_HAS_DIGIT_RE = re.compile(r"\d")
+
 
 def _normalize_free_text(s: str) -> str:
     s = s.lower()
@@ -59,6 +73,19 @@ def _normalize_free_text(s: str) -> str:
     return _WS_RE.sub(" ", s).strip()
 
 
+def _normalize_location(s: str) -> str:
+    return _DEPT_PREFIX_RE.sub("", s).strip()
+
+
+def _effective_value(field: str, value):
+    """Value used for presence/absence and matching. Currently only
+    salary_range gets special treatment: digit-free text is boilerplate,
+    not a real figure, so it's collapsed to null (see _HAS_DIGIT_RE)."""
+    if field == "salary_range" and value is not None and not _HAS_DIGIT_RE.search(value):
+        return None
+    return value
+
+
 def _values_match(field: str, gold_value, pred_value) -> bool:
     if field in LIST_FIELDS:
         gold_set = {v.strip().lower() for v in (gold_value or [])}
@@ -66,6 +93,8 @@ def _values_match(field: str, gold_value, pred_value) -> bool:
         return gold_set == pred_set
     if field in FREE_TEXT_FIELDS:
         return _normalize_free_text(gold_value) == _normalize_free_text(pred_value)
+    if field == "location":
+        return _normalize_location(gold_value) == _normalize_location(pred_value)
     return gold_value == pred_value
 
 
@@ -78,13 +107,13 @@ def score_posting(gold: dict, pred: Optional[dict]) -> dict[str, str]:
     """
     verdicts = {}
     for field in FIELDS:
-        gold_value = gold.get(field)
+        gold_value = _effective_value(field, gold.get(field))
         gold_present = gold_value is not None
         if pred is None:
             pred_present = False
             pred_value = None
         else:
-            pred_value = pred.get(field)
+            pred_value = _effective_value(field, pred.get(field))
             pred_present = pred_value is not None
 
         if not gold_present and not pred_present:
@@ -248,6 +277,36 @@ def test_free_text_field_still_catches_real_differences():
     gold = {"title": "x", "education_level": "Bac+5"}
     pred = {"title": "x", "education_level": "Bac+3"}
     assert score_posting(gold, pred)["education_level"] == "fp"
+
+
+def test_location_ignores_department_code_prefix():
+    gold = {"title": "x", "location": "Vendin-le-Vieil"}
+    pred = {"title": "x", "location": "62 - Vendin-le-Vieil"}
+    assert score_posting(gold, pred)["location"] == "tp"
+
+
+def test_location_still_catches_real_differences():
+    gold = {"title": "x", "location": "Vendin-le-Vieil"}
+    pred = {"title": "x", "location": "Lille"}
+    assert score_posting(gold, pred)["location"] == "fp"
+
+
+def test_digit_free_salary_range_treated_as_null():
+    gold = {"title": "x", "salary_range": None}
+    pred = {"title": "x", "salary_range": "Rémunération légale selon le pourcentage sur SMIC applicable selon votre âge"}
+    assert score_posting(gold, pred)["salary_range"] == "tn"
+
+
+def test_digit_free_salary_range_matches_either_direction():
+    gold = {"title": "x", "salary_range": "Rémunération selon niveau d'études + âge"}
+    pred = {"title": "x", "salary_range": None}
+    assert score_posting(gold, pred)["salary_range"] == "tn"
+
+
+def test_salary_range_with_a_real_figure_still_scored_normally():
+    gold = {"title": "x", "salary_range": "1500€/mois"}
+    pred = {"title": "x", "salary_range": None}
+    assert score_posting(gold, pred)["salary_range"] == "fn"
 
 
 def test_non_free_text_scalar_field_stays_exact_match():
