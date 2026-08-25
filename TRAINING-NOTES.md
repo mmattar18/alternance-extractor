@@ -194,21 +194,24 @@ account gets phone-verified later and someone wants to retry the parallel-hedge 
   undocumented in any CLI help text -- only found by reading
   `kagglesdk/kernels/types/kernels_api_service.py`'s docstring directly.
 
-## Chaining train -> benchmark (not yet solved)
+## Chaining train -> benchmark -- SOLVED
 
-`kaggle_benchmark.ipynb` expects the trained adapter at
-`/kaggle/input/alternance-extractor-adapter` (a Kaggle Dataset input, hardcoded path).
-Once `kaggle_train.ipynb` finishes successfully, the adapter needs to get from that run's
-`/kaggle/working/qlora-adapter` output into a Kaggle Dataset named
-`alternance-extractor-adapter` before the benchmark notebook can use it as-is. Options,
-neither tried yet:
-- `kaggle kernels output mattarmario/alternance-extractor-train -p <local dir>` to pull
-  the adapter files locally, then `kaggle datasets create` to publish them as a new
-  Dataset with that exact name.
-- Or edit `kaggle_benchmark.ipynb`'s `ADAPTER_DIR` to instead reference the training
-  kernel's output directly via `kernel_sources` in its `kernel-metadata.json` (Kaggle
-  auto-mounts a referenced kernel's output, though the exact mount path wasn't verified
-  this session).
+Downloaded v10's adapter locally (`kaggle kernels output`), assembled a clean folder with
+just `adapter_config.json`, `adapter_model.safetensors`, `tokenizer.json`,
+`tokenizer_config.json`, `chat_template.jinja` (skipped the bulky training-only files --
+`optimizer.pt`, `rng_state.pth`, etc. -- from the `checkpoint-33/` subdirectory, which
+also has a valid copy of everything from the epoch-end `save_strategy="epoch"` checkpoint,
+confirming `save_strategy="epoch"` was never actually broken, only the final
+`trainer.save_model()` call was). Published as a private Kaggle Dataset via
+`kaggle datasets create -p <folder>` with a `dataset-metadata.json` id
+`mattarmario/alternance-extractor-adapter` -- matches exactly what
+`kaggle_benchmark.ipynb`'s `ADAPTER_DIR = "/kaggle/input/alternance-extractor-adapter"`
+expects once attached as a `dataset_sources` input.
+
+Pushed `kaggle_benchmark.ipynb` as kernel `mattarmario/alternance-extractor-benchmark`,
+`kernel-metadata.json` with `"dataset_sources": ["mattarmario/alternance-extractor-adapter"]`
+and `machine_shape: "NvidiaTeslaT4"` (avoid the P100 issue from training). First run, in
+flight as of this note -- untested notebook, expect possible debugging.
 
 ## Open items
 
