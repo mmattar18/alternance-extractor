@@ -6,20 +6,24 @@ Running log of problems found and decisions made while hand-correcting
 it exists so decisions don't get re-litigated or made inconsistently across
 sessions.
 
-Last updated: 2026-08-22. Test-set progress: **100/100 corrected — test set is DONE**,
+Last updated: 2026-08-25. Test-set progress: **100/100 corrected — test set is DONE**,
 and a second cleanup pass has already gone over the ambiguous edge cases (see
-"Second-pass cleanup" section below). `train.jsonl` has also had two rounds of
-targeted fixes (duration ranges, intérim contract_type) — see "train.jsonl fixes"
-section below for the full history. Current baseline, after all fixes:
-`macro_f1 = 0.891`, `exact_match_rate = 34.0%` (run:
-`python eval/score.py data/test/test.jsonl data/test/test_candidates.jsonl`).
-Weakest fields by far: `required_skills` (F1 0.565, precision 0.453 — Groq
-massively overgenerates) and `duration_months` (F1 0.757, recall 0.609 — the
-range-to-null pattern below). The small macro_f1 drop from the original 0.893
-is expected and *correct*, not a regression — it comes from nulling out 4
-`company`/`years_experience_min` values Groq had happened to guess right
-without real textual support (hallucination corrections make the baseline
-score more honest, not higher).
+"Second-pass cleanup" section below). `train.jsonl` has had three rounds of
+targeted fixes (duration ranges, intérim contract_type, and now a full
+required_skills/nice_to_have_skills cleanup across all 541 rows) — see the
+`train.jsonl` sections below for the full history. Current baseline against
+the test set, after all test-set fixes: `macro_f1 = 0.891`, `exact_match_rate
+= 34.0%` (run: `python eval/score.py data/test/test.jsonl
+data/test/test_candidates.jsonl`) — **this number describes Groq's baseline
+and is unaffected by the train.jsonl cleanup below** (train.jsonl isn't read
+by eval/score.py at all; it only matters once Qwen is actually fine-tuned on
+it). Weakest fields by far: `required_skills` (F1 0.565, precision 0.453 —
+Groq massively overgenerates) and `duration_months` (F1 0.757, recall 0.609
+— the range-to-null pattern below). The small macro_f1 drop from the
+original 0.893 is expected and *correct*, not a regression — it comes from
+nulling out 4 `company`/`years_experience_min` values Groq had happened to
+guess right without real textual support (hallucination corrections make
+the baseline score more honest, not higher).
 
 The first 27 test-set postings were corrected by hand, screen by screen, via
 `label/review_server.py`. The remaining 73 were corrected by a forked agent
@@ -121,6 +125,76 @@ gap-between-Groq's-habits-and-the-gold-convention problem, patch
 `train.jsonl` the same way before fine-tuning, not after** — the whole
 point is Qwen's training labels should reflect the same conventions the
 test set is scored against.
+
+## `required_skills`/`nice_to_have_skills` full training-set cleanup (round 3)
+
+Rationale: `required_skills` is Groq's worst field by far (test-set F1 =
+0.565), and since `train.jsonl` trains Qwen by distillation from Groq's
+own raw predictions, that overgeneration habit would otherwise get baked
+straight into the fine-tune, capping Qwen at "as bad as Groq" on this
+field instead of giving it a real shot at beating it. Split all 541 rows
+into 4 batches, ran 4 parallel forks, each independently re-reading full
+`raw_text` and re-deciding both fields from scratch (not lightly editing
+Groq's output) using the rules above. Patches were written to separate
+files and merged/validated centrally rather than letting 4 forks write
+`train.jsonl` concurrently.
+
+**Result: 242/541 rows changed** (content-diff, case/order-insensitive).
+Re-validated against `JobPosting`: 0 failures.
+
+**New sub-patterns confirmed at this larger scale** (beyond what the
+73-posting test-set batch already found):
+- **"ROME savoir-faire/savoir-être boilerplate" is a specifically
+  identifiable, 100%-noise sub-pattern** — France Travail postings
+  frequently carry a verbatim generic-competency block (adaptability,
+  listening, rigor, etc., pulled from the ROME job-classification
+  taxonomy) that Groq reliably dumps wholesale into `required_skills`.
+  Always safe to strip entirely.
+- **Language duplication into skills fields is far more common than the
+  single Inserm instance** — hit repeatedly across all 4 batches
+  (Anglais/Espagnol appearing in `required_skills` on top of a proper
+  `language_requirements` entry). Always stripped from the skills field.
+- **Undergeneration also exists, not just overgeneration** — a handful of
+  rows had `required_skills: null` despite the text being packed with
+  named tools (e.g. ChatGPT/Claude/SEO/SEA, or SuccessFactors/Power
+  BI/VBA/Power Query) that Groq simply missed. Worth remembering the
+  training-set problem isn't purely "too much noise," a few rows were
+  also "too little signal."
+- **Training-outcome credentials aren't required_skills** — postings
+  describing what you'll *earn during* the apprenticeship ("vous
+  apprendrez... passage du CACES") got miscoded as prerequisites; these
+  belong to neither field.
+
+**Genuinely fuzzy judgment lines the 4 forks converged on, worth knowing
+about rather than treating as settled fact:**
+- Generic trade-domain nouns with no product name attached (électricité,
+  mécanique, hydraulique, pneumatique, CVC, "conception mécanique",
+  "droit social") were kept as legitimate named-domain skills for
+  trade/technical roles — looser than "concrete product name," applied
+  for consistency, but the line here is genuinely softer than for named
+  software.
+- Category acronyms with no vendor (CRM, ERP, WMS, CAO, SIRH) were kept
+  in some batches and excluded in others depending on how directly they
+  were framed — batch 2 explicitly leaned stricter (excluded WMS even
+  under "un plus" framing) while batch 3/4 kept several. **Not fully
+  consistent across the 4 batches** — if this matters for your writeup,
+  worth a second consistency pass specifically on category-acronym rows.
+- "Idéalement"/"intérêt fort pour"/"OU êtes motivé pour acquérir" framing
+  was treated as equivalent to "un plus" (→ nice-to-have) in several
+  rows — softer signal than the established "est un plus" rule, applied
+  by extension/analogy rather than being a literal match to the rule.
+- `Permis B` (driving license) accepted as a required_skill on ~6 rows —
+  it's a credential, not a technical skill, arguably belongs in a
+  different bucket the schema doesn't have.
+- A few single-mention tools inferred from a duty bullet rather than a
+  formal "Compétences" section (e.g. PEP, WINFRET, one CRM mention
+  mid-paragraph) — reasonable but shakier evidence than an explicit
+  skills-list entry.
+
+None of these are "wrong," they're judgment calls at the edge of the
+established rule, made independently by 4 parallel workers without
+cross-checking each other. **If required_skills eval numbers look
+inconsistent or surprising later, this is the first place to look.**
 
 ## "Intérim" contract_type schema gap — RESOLVED
 
