@@ -10,17 +10,22 @@ Last updated: 2026-08-25.
 
 ## Current status
 
-Kernel `mattarmario/alternance-extractor-train`, version 8, pushed and polling as of
-this note. History: v5 (batch=2, bf16, 3 epochs) **trained a full epoch successfully in
-~2h11m** -- real progress -- then OOM'd during the epoch-end eval pass (bug #5). v6
-switched to fp16 for T4 speed but crashed in ~2.5 min with a dtype mismatch (bug #6).
-v7 tried to fix that (pinned torch_dtype too) but hit the identical crash. v8 abandons
-fp16 and reverts to bf16 (proven working) with the eval-batch fix from bug #5 kept --
-this should reproduce v5's successful full-epoch behavior, now also completing the
-eval pass and adapter save that v5 never reached. User has stepped away and asked me
-to proceed autonomously through the rest of the pipeline (adapter hand-off, benchmark
-run, scoring, and the eventual 3-epoch "real" run) without further check-ins, only
-stopping for a genuine blocker (missing credential, irreversible/destructive decision).
+Kernel `mattarmario/alternance-extractor-train`, version 9, pushed and polling as of
+this note. **v8 was the first fully COMPLETE run (~2h14m, bf16, 1 epoch)** -- but its
+saved adapter turned out to be silently empty (bug #7). v9 fixes that
+(`device_map={"": 0}` instead of `"auto"`, plus a hard save-verification assertion) and
+is otherwise identical to v8's proven training config. If v9 completes AND passes its
+own save-verification assertion, the adapter should finally be usable for benchmarking.
+User has stepped away and asked me to proceed autonomously through the rest of the
+pipeline (adapter hand-off, benchmark run, scoring, and the eventual 3-epoch "real" run)
+without further check-ins, only stopping for a genuine blocker (missing credential,
+irreversible/destructive decision).
+
+**Full version history**: v1 P100/PyTorch incompatibility -> v2 trl API break -> v3
+chunked_nll bug -> v4 OOM (batch=8 too big) -> v5 **trained a full epoch (2h11m)**, then
+OOM'd on eval (eval batch size never set) -> v6 fp16 attempt, dtype crash -> v7 fp16
+attempt #2, same crash, abandoned fp16 -> v8 bf16 revert, **first fully COMPLETE run**,
+but silently empty adapter -> v9 device_map + save-verification fix, in flight.
 
 **Kaggle account**: `mattarmario`, API token stored at `C:\Users\mmmar\.kaggle\access_token`.
 GPU quota: 30h/week, ~0.15h used so far across all attempts -- quota is not a constraint.
@@ -96,6 +101,24 @@ that hasn't been solved yet).
    sidesteps the whole bug class rather than patching around one instance of it.
    **If revisiting fp16 for speed later, do it with real GPU access to verify locally
    rather than reasoning from static source inspection alone.**
+
+7. **Silently-empty adapter save.** v8 (bf16, 1 epoch) completed with `COMPLETE` status,
+   no error, and printed "Adapter saved to /kaggle/working/qlora-adapter" -- **the first
+   fully successful run, ~2h14m total.** But `adapter_model.safetensors` was genuinely
+   0 bytes and no tokenizer files were written at all. Confirmed with two independent
+   fresh downloads (ruled out a transfer glitch -- other large files in the same output,
+   e.g. `train.jsonl` at 1.8MB, downloaded correctly; Kaggle's `kernels_list_files` API
+   size field is also unreliable/broken -- reported near-identical tiny numbers for
+   every file regardless of real size, don't trust it). `trainer.save_model()` /
+   `tokenizer.save_pretrained()` silently wrote nothing usable, no exception raised.
+   Leading suspect (not yet confirmed with a real run): `device_map="auto"` invokes
+   accelerate's hook-based `dispatch_model()` even on a single GPU -- the same mechanism
+   already confirmed to turn `model.forward` into a `functools.partial` for bug #3
+   (chunked_nll). **Fix**: `device_map={"": 0}` (pin to the single T4 explicitly,
+   there's no real multi-device need here) instead of `"auto"`. **Also added a hard
+   assertion right after saving** (adapter file >1MB, tokenizer.json exists) so a repeat
+   of this fails immediately and loudly instead of silently succeeding and only being
+   caught after a ~2h14m run plus a fresh download in a separate notebook.
 
 ## Speed tuning attempted
 
