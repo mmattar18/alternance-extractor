@@ -8,20 +8,81 @@ training/Kaggle execution).
 
 Last updated: 2026-08-25.
 
+## Label-quality audit (2026-08-26) -- 87 further fixes to train.jsonl
+
+Compared per-field non-null rates in `train.jsonl` (raw Groq labels, only
+required_skills/nice_to_have_skills previously cleaned) against the hand-corrected test
+gold. **The point: any field where the two distributions disagree is a field where the
+model is being taught a different convention than it will be graded on.**
+
+`company` was the outlier -- **93% non-null in train vs 76% in gold (+17pp)**: the model
+was learning to always name an employer when the right answer is null ~24% of the time.
+Three mechanically-verifiable defect classes found and nulled:
+
+| field | rows fixed | what |
+|---|---|---|
+| `company` | 28 | 16 bare department codes / `"NN - City"` fragments, 12 broker-not-employer (11x ISCOD, 1x LE CABRH) |
+| `salary_range` | 51 | digit-free boilerplate -- `eval/score.py` already scores these as null, so training on them taught the model to emit text worth nothing |
+| `education_level` | 8 | all `"Bac+3"`, token absent from `raw_text` under a whitespace-insensitive check -- Groq's documented signature hallucination |
+
+Gaps vs gold after: `company` +17pp -> **+11pp**, `education_level` +7pp -> **+5pp**,
+`salary_range` +5pp -> **-4pp**. All 541 rows re-validate against `JobPosting`.
+
+**Residual `company` gap (+11pp, ~60 rows) is NOT pattern-matchable** -- it's subtler
+hallucination (plausible-looking company names with no textual support). Fixing it needs
+per-posting reading, same as the required_skills pass. That is the highest-value remaining
+label-quality work if the benchmark shows `company` underperforming.
+
+List-field conventions were checked for train/gold drift and are broadly aligned
+(`required_skills` non-null 44% train vs 49% gold; mean items 3.02 vs 3.78 -- train is
+slightly *terser*, so expect a small recall penalty on that field, not a precision one).
+
+## What the 1-epoch run's metrics actually showed
+
+From `checkpoint-33/trainer_state.json` (worth reading after every run -- it is the only
+place the loss curve survives, the Kaggle log stream does not carry it):
+
+```
+step 10  loss 1.0329  mean_token_accuracy 0.7784  lr 1e-4   grad_norm 0.359
+step 20  loss 0.5494  mean_token_accuracy 0.8805  lr 1e-4   grad_norm 0.124
+step 30  loss 0.4885  mean_token_accuracy 0.8946  lr 0.0    grad_norm 0.096
+eval@33  eval_loss 0.4439  eval_mean_token_accuracy 0.9043
+```
+
+Two conclusions, both acted on:
+1. **`eval_loss` (0.4439) is BELOW final train loss (0.4885)**, both still falling steeply
+   -> the model is **underfit, not overfit**. 3 epochs is justified; there was no evidence
+   for stopping at 1.
+2. **`learning_rate` was already 0.0 by step 30.** 514 train rows / effective batch 16 =
+   only 33 optimizer steps, and the default linear scheduler annealed the LR to zero across
+   them, so most of the run trained at a near-dead LR. 3 epochs (~99 steps) spreads the
+   decay usefully; added `warmup_ratio=0.05` so the first steps don't hit 2e-4 cold.
+
 ## Current status
 
-**v10 SUCCEEDED -- first genuinely complete, valid QLoRA adapter.** Kernel
-`mattarmario/alternance-extractor-train`, version 10, COMPLETE in ~2h (7171s). Printed
-`Adapter saved to /kaggle/working/qlora-adapter (36,981,856 bytes, verified non-empty)`
--- passed the hard assertion, and 37MB matches the expected size for 18.4M trainable
-LoRA params almost exactly. This is 1 epoch on `train.jsonl` (541 rows), bf16,
-batch=2/accumulation=8, `loss_type="nll"`.
+**Two kernels running concurrently as of this note** (Kaggle permits it -- verified, both
+showed RUNNING simultaneously, so the long training does NOT have to queue behind the
+benchmark):
 
-**Next up**: hand this adapter off to `kaggle_benchmark.ipynb` (still needs the
-train->benchmark chaining solved, see "Chaining train -> benchmark" section below),
-run the benchmark, score against the Groq baseline. Then decide on the 3-epoch "real"
-run. User has stepped away and asked me to proceed autonomously through the rest of the
-pipeline without further check-ins, only stopping for a genuine blocker.
+- `mattarmario/alternance-extractor-benchmark` **v4** -- benchmarking the **1-epoch**
+  adapter (v10 training output) against the Groq baseline. Expect ~1-2h: 100 postings x
+  up to 3 generation attempts x 512 new tokens on a T4.
+- `mattarmario/alternance-extractor-train` **v11** -- the **real 3-epoch run**, picking up
+  both the 87 label fixes and the warmup/epoch changes above. Expect ~6h (3 x the ~2h
+  single-epoch time).
+
+**v10 (superseded but the milestone run)**: first genuinely complete, valid QLoRA adapter
+-- COMPLETE in ~2h (7171s), `Adapter saved ... (36,981,856 bytes, verified non-empty)`,
+37MB matching 18.4M trainable LoRA params. 1 epoch, bf16, batch=2/accum=8,
+`loss_type="nll"`. Its adapter is what the currently-running benchmark is scoring, and is
+published as the Kaggle Dataset `mattarmario/alternance-extractor-adapter`.
+
+**When v11 finishes**: download its adapter, re-publish (or version) the
+`alternance-extractor-adapter` Dataset with the 3-epoch weights, re-push the benchmark
+kernel, and compare all three -- Groq baseline vs 1-epoch Qwen vs 3-epoch Qwen. Then write
+the real numbers into the README's status section, which still carries the "not measured"
+placeholder. User is asleep and asked for autonomous progress, stopping only for a genuine
+blocker.
 
 **Full version history**: v1 P100/PyTorch incompatibility -> v2 trl API break -> v3
 chunked_nll bug -> v4 OOM (batch=8 too big) -> v5 **trained a full epoch (2h11m)**, then
