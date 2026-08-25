@@ -10,24 +10,25 @@ Last updated: 2026-08-25.
 
 ## Current status
 
-Kernel `mattarmario/alternance-extractor-train`, version 10, pushed and polling as of
-this note. **v8 was the first fully COMPLETE run (~2h14m, bf16, 1 epoch)** -- but its
-saved adapter turned out to be silently empty (bug #7). v9 tried `device_map={"": 0}`
-as the fix -- OOM'd immediately (regressed memory footprint), reverted. v10 fixes the
-actual save bug instead (`model.save_pretrained()` direct, not `trainer.save_model()`),
-keeps `device_map="auto"` (proven memory footprint) and the hard save-verification
-assertion. If v10 completes AND passes its own assertion, the adapter should finally be
-usable for benchmarking. User has stepped away and asked me to proceed autonomously
-through the rest of the pipeline (adapter hand-off, benchmark run, scoring, and the
-eventual 3-epoch "real" run) without further check-ins, only stopping for a genuine
-blocker (missing credential, irreversible/destructive decision).
+**v10 SUCCEEDED -- first genuinely complete, valid QLoRA adapter.** Kernel
+`mattarmario/alternance-extractor-train`, version 10, COMPLETE in ~2h (7171s). Printed
+`Adapter saved to /kaggle/working/qlora-adapter (36,981,856 bytes, verified non-empty)`
+-- passed the hard assertion, and 37MB matches the expected size for 18.4M trainable
+LoRA params almost exactly. This is 1 epoch on `train.jsonl` (541 rows), bf16,
+batch=2/accumulation=8, `loss_type="nll"`.
+
+**Next up**: hand this adapter off to `kaggle_benchmark.ipynb` (still needs the
+train->benchmark chaining solved, see "Chaining train -> benchmark" section below),
+run the benchmark, score against the Groq baseline. Then decide on the 3-epoch "real"
+run. User has stepped away and asked me to proceed autonomously through the rest of the
+pipeline without further check-ins, only stopping for a genuine blocker.
 
 **Full version history**: v1 P100/PyTorch incompatibility -> v2 trl API break -> v3
 chunked_nll bug -> v4 OOM (batch=8 too big) -> v5 **trained a full epoch (2h11m)**, then
 OOM'd on eval (eval batch size never set) -> v6 fp16 attempt, dtype crash -> v7 fp16
-attempt #2, same crash, abandoned fp16 -> v8 bf16 revert, **first fully COMPLETE run**,
-but silently empty adapter -> v9 device_map={"": 0} attempt, OOM'd immediately, reverted
--> v10 model.save_pretrained() fix (the real fix, keeps device_map="auto"), in flight.
+attempt #2, same crash, abandoned fp16 -> v8 bf16 revert, first fully COMPLETE run, but
+silently empty adapter -> v9 device_map={"": 0} attempt, OOM'd immediately, reverted ->
+**v10 model.save_pretrained() fix -- SUCCESS, valid adapter saved.**
 
 **Kaggle account**: `mattarmario`, API token stored at `C:\Users\mmmar\.kaggle\access_token`.
 GPU quota: 30h/week, ~0.15h used so far across all attempts -- quota is not a constraint.
