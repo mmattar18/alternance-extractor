@@ -10,14 +10,17 @@ Last updated: 2026-08-25.
 
 ## Current status
 
-Kernel `mattarmario/alternance-extractor-train`, version 7, pushed and polling as of
+Kernel `mattarmario/alternance-extractor-train`, version 8, pushed and polling as of
 this note. History: v5 (batch=2, bf16, 3 epochs) **trained a full epoch successfully in
 ~2h11m** -- real progress -- then OOM'd during the epoch-end eval pass (bug #5). v6
-fixed that plus switched to fp16 for T4 speed, but crashed in ~2.5 min with a dtype
-mismatch (bug #6). v7 fixes that. User has stepped away and asked me to proceed
-autonomously through the rest of the pipeline (adapter hand-off, benchmark run,
-scoring, and the eventual 3-epoch "real" run) without further check-ins, only stopping
-for a genuine blocker (missing credential, irreversible/destructive decision).
+switched to fp16 for T4 speed but crashed in ~2.5 min with a dtype mismatch (bug #6).
+v7 tried to fix that (pinned torch_dtype too) but hit the identical crash. v8 abandons
+fp16 and reverts to bf16 (proven working) with the eval-batch fix from bug #5 kept --
+this should reproduce v5's successful full-epoch behavior, now also completing the
+eval pass and adapter save that v5 never reached. User has stepped away and asked me
+to proceed autonomously through the rest of the pipeline (adapter hand-off, benchmark
+run, scoring, and the eventual 3-epoch "real" run) without further check-ins, only
+stopping for a genuine blocker (missing credential, irreversible/destructive decision).
 
 **Kaggle account**: `mattarmario`, API token stored at `C:\Users\mmmar\.kaggle\access_token`.
 GPU quota: 30h/week, ~0.15h used so far across all attempts -- quota is not a constraint.
@@ -68,19 +71,31 @@ that hasn't been solved yet).
    eval instead of train (`Tried to allocate 10.89 GiB`). **Fix**: pin
    `per_device_eval_batch_size=PER_DEVICE_BATCH_SIZE`.
 
-6. **bf16/fp16 dtype mismatch.** Switching to `fp16=True` (bug #5's fix) crashed during
-   gradient-norm clipping: `NotImplementedError:
-   "_amp_foreach_non_finite_check_and_unscale_cuda" not implemented for 'BFloat16'`.
-   Setting `bnb_4bit_compute_dtype=torch.float16` only affects the quantized base
-   weights' internal compute -- the unquantized parts of the model (embeddings, and
-   critically the LoRA-injected layers `get_peft_model` adds afterward) still inherited
-   Qwen's native checkpoint dtype (bfloat16) because `from_pretrained`'s `torch_dtype`
-   was never set. fp16 mixed-precision training's `GradScaler` can't unscale bfloat16
-   gradients. **Fix**: pin `torch_dtype=torch.float16` on `from_pretrained` too, so
-   `torch_dtype`, the bnb compute dtype, and `fp16=True` all agree. **Lesson: when
-   switching precision, every dtype touchpoint (model load, quantization compute dtype,
-   training args) needs to agree -- setting just one silently leaves others on the old
-   value rather than erroring immediately.**
+6. **bf16/fp16 dtype mismatch -- fp16 abandoned, reverted to bf16.** Switching to
+   `fp16=True` (bug #5's fix) crashed during gradient-norm clipping:
+   `NotImplementedError: "_amp_foreach_non_finite_check_and_unscale_cuda" not
+   implemented for 'BFloat16'`. First hypothesis: `bnb_4bit_compute_dtype=torch.float16`
+   only affects the quantized base weights' compute, so pinned
+   `torch_dtype=torch.float16` on `from_pretrained` too, to make the unquantized parts
+   (embeddings, LoRA-injected layers) agree. **Same crash persisted (v7).** Traced
+   further: peft's LoRA-on-bnb-Linear4bit path reads `base_layer.compute_dtype` to
+   decide the new adapter's dtype
+   (`peft/tuners/tuners_utils.py::_get_base_layer_device_and_dtype`), and transformers
+   passes `quantization_config.bnb_4bit_compute_dtype` straight through to
+   `bnb.nn.Linear4bit`'s constructor (`transformers/integrations/bitsandbytes.py`) --
+   both looked correct on paper, so the real mismatch point was never confirmed (no
+   local GPU to actually reproduce and verify; possible version drift between what's
+   installed locally for inspection vs what Kaggle's `!pip install -U` grabs at push
+   time). **Rather than burn a third attempt guessing blind, reverted to bf16
+   entirely** (`bf16=True`, `bnb_4bit_compute_dtype=torch.bfloat16`,
+   `torch_dtype=torch.bfloat16`). Key insight that justified reverting instead of
+   continuing to chase fp16: **bf16 mixed-precision training doesn't use `GradScaler`
+   at all** -- bf16's exponent range matches fp32, so it never needs loss scaling the
+   way fp16 does. That's *why* bf16 completed a full epoch (v5) while fp16 kept
+   crashing regardless of which specific parameter was the actual culprit -- reverting
+   sidesteps the whole bug class rather than patching around one instance of it.
+   **If revisiting fp16 for speed later, do it with real GPU access to verify locally
+   rather than reasoning from static source inspection alone.**
 
 ## Speed tuning attempted
 
