@@ -210,8 +210,19 @@ expects once attached as a `dataset_sources` input.
 
 Pushed `kaggle_benchmark.ipynb` as kernel `mattarmario/alternance-extractor-benchmark`,
 `kernel-metadata.json` with `"dataset_sources": ["mattarmario/alternance-extractor-adapter"]`
-and `machine_shape: "NvidiaTeslaT4"` (avoid the P100 issue from training). First run, in
-flight as of this note -- untested notebook, expect possible debugging.
+and `machine_shape: "NvidiaTeslaT4"` (avoid the P100 issue from training).
+
+**Mount path gotcha, cost 2 failed runs to find**: the notebook's `ADAPTER_DIR =
+"/kaggle/input/alternance-extractor-adapter"` followed the classic, universally-documented
+Kaggle dataset mount convention -- and failed both times with a confusing
+`HFValidationError`-wrapped-in-`ValueError` (peft's `PeftModel.from_pretrained` couldn't
+find `adapter_config.json` locally, fell back to treating the path as a HF Hub repo ID,
+which then failed repo-id validation). Added a throwaway diagnostic cell that walked
+`/kaggle/input` -- the dataset files were genuinely there the whole time, just mounted at
+`/kaggle/input/datasets/mattarmario/alternance-extractor-adapter/` instead. **This Kaggle
+API version (kagglesdk / OAuth-token CLI) uses a different mount path than the classic
+one every tutorial documents** -- fixed `ADAPTER_DIR` accordingly, removed the diagnostic
+cell. Worth remembering for any future dataset-as-kernel-input wiring on this account.
 
 ## Open items
 
