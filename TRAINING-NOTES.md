@@ -10,22 +10,24 @@ Last updated: 2026-08-25.
 
 ## Current status
 
-Kernel `mattarmario/alternance-extractor-train`, version 9, pushed and polling as of
+Kernel `mattarmario/alternance-extractor-train`, version 10, pushed and polling as of
 this note. **v8 was the first fully COMPLETE run (~2h14m, bf16, 1 epoch)** -- but its
-saved adapter turned out to be silently empty (bug #7). v9 fixes that
-(`device_map={"": 0}` instead of `"auto"`, plus a hard save-verification assertion) and
-is otherwise identical to v8's proven training config. If v9 completes AND passes its
-own save-verification assertion, the adapter should finally be usable for benchmarking.
-User has stepped away and asked me to proceed autonomously through the rest of the
-pipeline (adapter hand-off, benchmark run, scoring, and the eventual 3-epoch "real" run)
-without further check-ins, only stopping for a genuine blocker (missing credential,
-irreversible/destructive decision).
+saved adapter turned out to be silently empty (bug #7). v9 tried `device_map={"": 0}`
+as the fix -- OOM'd immediately (regressed memory footprint), reverted. v10 fixes the
+actual save bug instead (`model.save_pretrained()` direct, not `trainer.save_model()`),
+keeps `device_map="auto"` (proven memory footprint) and the hard save-verification
+assertion. If v10 completes AND passes its own assertion, the adapter should finally be
+usable for benchmarking. User has stepped away and asked me to proceed autonomously
+through the rest of the pipeline (adapter hand-off, benchmark run, scoring, and the
+eventual 3-epoch "real" run) without further check-ins, only stopping for a genuine
+blocker (missing credential, irreversible/destructive decision).
 
 **Full version history**: v1 P100/PyTorch incompatibility -> v2 trl API break -> v3
 chunked_nll bug -> v4 OOM (batch=8 too big) -> v5 **trained a full epoch (2h11m)**, then
 OOM'd on eval (eval batch size never set) -> v6 fp16 attempt, dtype crash -> v7 fp16
 attempt #2, same crash, abandoned fp16 -> v8 bf16 revert, **first fully COMPLETE run**,
-but silently empty adapter -> v9 device_map + save-verification fix, in flight.
+but silently empty adapter -> v9 device_map={"": 0} attempt, OOM'd immediately, reverted
+-> v10 model.save_pretrained() fix (the real fix, keeps device_map="auto"), in flight.
 
 **Kaggle account**: `mattarmario`, API token stored at `C:\Users\mmmar\.kaggle\access_token`.
 GPU quota: 30h/week, ~0.15h used so far across all attempts -- quota is not a constraint.
@@ -119,6 +121,19 @@ that hasn't been solved yet).
    assertion right after saving** (adapter file >1MB, tokenizer.json exists) so a repeat
    of this fails immediately and loudly instead of silently succeeding and only being
    caught after a ~2h14m run plus a fresh download in a separate notebook.
+
+   **v9 correction: `device_map={"": 0}` OOM'd at the very first training step**
+   (`Tried to allocate 7.04 GiB`) -- `"auto"` apparently has a smaller memory footprint
+   than pinning explicitly (mechanism unconfirmed), so that change was reverted without
+   ever confirming it fixed the save bug in the first place. **Real fix (v10)**: call
+   `model.save_pretrained(OUTPUT_DIR)` directly on the `PeftModel` object instead of
+   `trainer.save_model(OUTPUT_DIR)`. The latter goes through `accelerator.unwrap_model()`
+   before saving; something in that indirection (likely interacting with `"auto"`'s
+   hook-based dispatch) silently produced an empty save with no exception. Saving
+   directly from the `model` object we built via `get_peft_model()` is unambiguous about
+   whose weights get written, and is the more common QLoRA-tutorial pattern for exactly
+   this reason. Kept `device_map="auto"` (proven memory footprint) and the hard
+   save-verification assertion from the first fix attempt.
 
 ## Speed tuning attempted
 
