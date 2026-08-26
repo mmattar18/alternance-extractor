@@ -8,6 +8,57 @@ training/Kaggle execution).
 
 Last updated: 2026-08-25.
 
+## THE BIG ONE: loss was computed over the whole sequence, not the answer
+
+Found while diagnosing why the 1-epoch model never abstains (see `RESULTS.md`). **This is
+the highest-leverage fix in the project so far and it invalidates every training run
+before v13.**
+
+trl decides which tokens the loss covers from the *dataset shape*:
+
+| dataset shape | trl treats it as | loss covers |
+|---|---|---|
+| `{"messages": [...]}` | conversational **language modeling** | **the entire sequence** |
+| `{"prompt": ..., "completion": ...}` | **prompt-completion** | the completion only |
+
+The notebook emitted `{"messages": [...]}`. trl also *explicitly refuses*
+`completion_only_loss` for that shape (`"completion_only_loss argument is not supported
+for language modeling datasets"`), so there was no way to scope it without changing shape.
+
+Measured with the real Qwen tokenizer over all 541 rows:
+
+```
+SYSTEM_PROMPT   1566 tokens, BYTE-IDENTICAL in all 541 examples
+full sequence   median 2174 tokens
+JSON answer     median  129 tokens  = 6.0% of the sequence (min 4.0%, max 10.7%)
+```
+
+So **~94% of the gradient was spent teaching the model to reproduce a constant system
+prompt and the input posting** -- text it never generates at inference. This also explains
+the deceptively healthy `mean_token_accuracy` of 0.90: most of what it was scored on was a
+system prompt identical in every example, i.e. trivially memorised.
+
+It is the most plausible cause of the 1-epoch model's defining failure: non-null
+`required_skills` on 99/100 postings vs gold's 49/100 (fp=85, tn=1). **Not a label problem**
+-- those labels are non-null only 44% of the time; the model simply had almost no gradient
+teaching it what a correct answer looks like, let alone when to abstain.
+
+**Fix (v13)**: emit `{"prompt": [system, user], "completion": [assistant]}`, plus explicit
+`completion_only_loss=True` and an `assert` on dataset shape so a silent regression cannot
+recur. ~16x more effective gradient on the actual task for identical compute.
+
+**`assistant_only_loss=True` is NOT a usable alternative here -- do not try it.** It
+requires the chat template to mark assistant spans with `{% generation %}`. Qwen2.5-Instruct's
+template has none: verified directly that
+`apply_chat_template(..., return_assistant_tokens_mask=True)` returns a mask selecting
+**zero** tokens (transformers even warns `return_assistant_tokens_mask==True but chat
+template does not contain 'generation' keyword`). Setting it would have trained on nothing
+at all, silently.
+
+**Caveat when comparing runs**: v13's `eval_loss` is computed over the completion only, so
+its absolute value is NOT comparable to v10's full-sequence `eval_loss` (0.4439). Compare
+benchmark scores, not losses, across that boundary.
+
 ## Label-quality audit (2026-08-26) -- 87 further fixes to train.jsonl
 
 Compared per-field non-null rates in `train.jsonl` (raw Groq labels, only
@@ -60,43 +111,27 @@ Two conclusions, both acted on:
 
 ## Current status
 
-**Two kernels running concurrently as of this note** (Kaggle permits it -- verified, both
-showed RUNNING simultaneously, so the long training does NOT have to queue behind the
-benchmark):
+**Kernel `mattarmario/alternance-extractor-train` v13 is the live run** -- 3 epochs,
+completion-only loss, cleaned labels. Started ~02:17, expect ~6h (finishing ~08:20).
+v12 (3 epochs but still full-sequence loss) was deliberately killed ~35 min in once the
+loss-scoping bug was found -- it would have burned 6h training at ~6% gradient efficiency.
 
-- `mattarmario/alternance-extractor-benchmark` **v4** -- benchmarking the **1-epoch**
-  adapter (v10 training output) against the Groq baseline. Expect ~1-2h: 100 postings x
-  up to 3 generation attempts x 512 new tokens on a T4.
-- `mattarmario/alternance-extractor-train` **v11** -- the **real 3-epoch run**, picking up
-  both the 87 label fixes and the warmup/epoch changes above. Expect ~6h (3 x the ~2h
-  single-epoch time).
+**Benchmark of the 1-epoch model is DONE** -- see `RESULTS.md` for the full table.
+Headline: Groq macro_f1 **0.891** / exact-match 34.0% vs fine-tuned **0.510** / 0.0%,
+both 100% JSON-valid. That model is the v10 adapter, trained *before* both the label
+cleanup and the loss-scoping fix, so it is a floor, not the headline number.
 
-**v10 (superseded but the milestone run)**: first genuinely complete, valid QLoRA adapter
--- COMPLETE in ~2h (7171s), `Adapter saved ... (36,981,856 bytes, verified non-empty)`,
-37MB matching 18.4M trainable LoRA params. 1 epoch, bf16, batch=2/accum=8,
-`loss_type="nll"`. Its adapter is what the currently-running benchmark is scoring, and is
-published as the Kaggle Dataset `mattarmario/alternance-extractor-adapter`.
-
-**When v11 finishes**: download its adapter, re-publish (or version) the
-`alternance-extractor-adapter` Dataset with the 3-epoch weights, re-push the benchmark
-kernel, and compare all three -- Groq baseline vs 1-epoch Qwen vs 3-epoch Qwen. Then write
-the real numbers into the README's status section, which still carries the "not measured"
-placeholder. User is asleep and asked for autonomous progress, stopping only for a genuine
-blocker.
-
-**Full version history**: v1 P100/PyTorch incompatibility -> v2 trl API break -> v3
-chunked_nll bug -> v4 OOM (batch=8 too big) -> v5 **trained a full epoch (2h11m)**, then
-OOM'd on eval (eval batch size never set) -> v6 fp16 attempt, dtype crash -> v7 fp16
-attempt #2, same crash, abandoned fp16 -> v8 bf16 revert, first fully COMPLETE run, but
-silently empty adapter -> v9 device_map={"": 0} attempt, OOM'd immediately, reverted ->
-**v10 model.save_pretrained() fix -- SUCCESS, valid adapter saved.**
-
-**Kaggle account**: `mattarmario`, API token stored at `C:\Users\mmmar\.kaggle\access_token`.
-GPU quota: 30h/week, ~0.15h used so far across all attempts -- quota is not a constraint.
-
-**Next step once this finishes successfully**: run `notebooks/kaggle_benchmark.ipynb`
-(needs the trained adapter as input -- see "Chaining train -> benchmark" below for how
-that hasn't been solved yet).
+**To re-benchmark when v13 lands** (all verified, just needs running):
+1. `kaggle kernels output mattarmario/alternance-extractor-train -p <dir>` (~15 min; pull
+   `qlora-adapter/`).
+2. Copy `adapter_config.json`, `adapter_model.safetensors`, `tokenizer.json`,
+   `tokenizer_config.json`, `chat_template.jinja` into a clean folder alongside the
+   existing `dataset-metadata.json` (id `mattarmario/alternance-extractor-adapter`).
+   Skip `checkpoint-*/` -- `optimizer.pt` alone is 74MB and is not needed for inference.
+3. `kaggle datasets version -p <folder> -m "3-epoch completion-only-loss adapter"`.
+4. Re-push the benchmark kernel: `kaggle kernels push -p <benchmark folder>` (its
+   `dataset_sources` already points at that dataset slug and picks up the newest version).
+5. Compare against the Run 1 table in `RESULTS.md`.
 
 ## Bug history (all four hit in sequence, each only surfaced by actually running it)
 
