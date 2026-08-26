@@ -235,6 +235,52 @@ def aggregate_partial(records: list[tuple[dict, Optional[dict], bool]]) -> dict:
     }
 
 
+def skills_union_report(records) -> dict:
+    """Diagnostic: score required_skills + nice_to_have_skills as ONE merged set.
+
+    Splitting a skill into "required" vs "nice-to-have" depends on the posting's own
+    framing ("est un plus"), which is often absent or ambiguous, and a model that
+    extracts a skill correctly but files it in the wrong bucket is currently penalised
+    TWICE -- once as a false positive, once as a false negative. Merging isolates the
+    extraction ability from the importance-classification ability.
+
+    This is a RELAXATION and is reported as a clearly-labelled diagnostic, never as the
+    headline: it removes a real sub-task from the schema, so it is not comparable to the
+    per-field numbers. Measured on the Groq baseline it is worth about +0.08 item-F1
+    (required 0.711 -> union 0.791), and it does NOT rescue the field -- even merged it
+    remains the weakest one, because the dominant error is over-generation (fp 91 vs
+    tp 216), not misfiling. Misfiling accounts for 9.2% of gold items and, notably, ran
+    entirely in one direction: 22 gold-required items predicted as nice-to-have, 0 the
+    other way.
+    """
+    def _s(d, f):
+        return {x.strip().lower() for x in (d.get(f) or [])} if d else set()
+
+    tp = fp = fn = 0
+    misfiled_req_as_nice = misfiled_nice_as_req = 0
+    gold_items = 0
+    for gold, pred, _valid in records:
+        gr, gn = _s(gold, "required_skills"), _s(gold, "nice_to_have_skills")
+        pr_, pn = _s(pred, "required_skills"), _s(pred, "nice_to_have_skills")
+        misfiled_req_as_nice += len(gr & pn)
+        misfiled_nice_as_req += len(gn & pr_)
+        g, p = gr | gn, pr_ | pn
+        tp += len(g & p); fp += len(p - g); fn += len(g - p)
+        gold_items += len(g)
+
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    misfiled = misfiled_req_as_nice + misfiled_nice_as_req
+    return {
+        "f1": f1, "precision": precision, "recall": recall,
+        "tp": tp, "fp": fp, "fn": fn,
+        "misfiled_required_as_nice": misfiled_req_as_nice,
+        "misfiled_nice_as_required": misfiled_nice_as_req,
+        "misfiled_share_of_gold_items": misfiled / gold_items if gold_items else 0.0,
+    }
+
+
 def bootstrap_ci(records, metric="macro_f1", n_boot=2000, seed=0, alpha=0.05):
     """Percentile bootstrap CI for a metric, resampling POSTINGS with replacement.
 
@@ -507,6 +553,22 @@ def test_paired_bootstrap_detects_a_real_gap_and_ignores_a_null_one():
     assert big["delta"] > 0 and big["significant"], "a total failure vs perfect must register"
     null = paired_bootstrap_delta(good, good, n_boot=200, seed=1)
     assert null["delta"] == 0 and not null["significant"], "identical arms must not look different"
+
+
+def test_skills_union_credits_a_misfiled_skill_but_not_a_missing_one():
+    gold = {"required_skills": ["Python"], "nice_to_have_skills": None}
+    misfiled = {"required_skills": None, "nice_to_have_skills": ["Python"]}
+    missing = {"required_skills": None, "nice_to_have_skills": None}
+    # strict per-field double-penalises the misfile (fp on one field, fn on the other)
+    v = score_posting(gold, misfiled)
+    assert v["required_skills"] == "fn" and v["nice_to_have_skills"] == "fp"
+    # merged: the skill WAS extracted, so it counts, and the misfile is reported
+    u = skills_union_report([(gold, misfiled, True)])
+    assert (u["tp"], u["fp"], u["fn"]) == (1, 0, 0)
+    assert u["misfiled_required_as_nice"] == 1
+    # but a genuinely missing skill is still a miss -- merging must not hide that
+    u2 = skills_union_report([(gold, missing, True)])
+    assert (u2["tp"], u2["fn"]) == (0, 1) and u2["misfiled_required_as_nice"] == 0
 
 
 def test_fields_cover_full_schema():
