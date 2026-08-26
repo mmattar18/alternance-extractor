@@ -40,6 +40,36 @@ Non-negotiable rules:
    French text to English or vice versa.
 7. If the posting text is truncated or garbled, extract what you can and leave the rest null — don't refuse."""
 
+# Short variant, for FINE-TUNED models only. 79% of SYSTEM_PROMPT (1173 of 1486 tokens)
+# is the embedded JSON schema dump, repeated identically in every one of the 654 training
+# examples. A fine-tuned model learns the output shape from those examples, so re-spelling
+# the schema every time is dead weight -- it makes the median training sequence 2138 tokens
+# when the answer itself is ~129.
+#
+# What is KEPT is the rules block: null semantics, the 0-vs-null distinction on
+# years_experience_min, and the alternance_rhythm conditional. Those are subtle and rare in
+# the data (years_experience_min is non-null in only 69 of 654 rows), so a model may not
+# reliably induce them from examples alone. Dropping the schema is the cheap win; dropping
+# the rules would be a gamble.
+#
+# NOT for prompted baselines -- Groq and un-fine-tuned Qwen have never seen this schema and
+# genuinely need the dump. Using this for them would be sabotage, not a fair comparison.
+SYSTEM_PROMPT_SHORT = """You extract structured data from job postings (French or English) into a fixed JSON schema.
+
+Non-negotiable rules:
+1. Output ONLY a single JSON object matching the schema. No prose, no markdown fences, no explanation.
+2. Every field is optional. Use `null` for anything the posting does not state. Never guess, infer from
+   typical values, or fill in "reasonable defaults." If it isn't in the text, it's null.
+3. `years_experience_min` is the one field where 0 and null mean different things:
+   - 0 means the posting EXPLICITLY says no experience is required (e.g. "débutant accepté").
+   - null means experience is simply not mentioned. Do not default a missing mention to 0.
+4. `alternance_rhythm` must be null unless `contract_type` is "alternance" AND the posting states a rhythm.
+5. For list fields (skills, language_requirements): only include items explicitly stated. If none are
+   stated, use null — not an empty list.
+6. Extract values as they are written (e.g. keep "Bac+5", don't normalize to "Master"). Do not translate.
+7. If the posting text is truncated or garbled, extract what you can and leave the rest null — don't refuse."""
+
+
 _FEWSHOT_EXAMPLES = [
     (
         "Data Analyst en Alternance (H/F)\nAcme Corp — Lyon\n\n"
