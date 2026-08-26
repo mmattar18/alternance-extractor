@@ -168,6 +168,72 @@ def aggregate(records: list[tuple[dict, Optional[dict], bool]]) -> dict:
     }
 
 
+def _list_item_counts(gold_value, pred_value) -> tuple[int, int, int]:
+    """Per-ITEM tp/fp/fn for one list field on one posting, case-insensitive.
+
+    Exact set equality (what aggregate() uses) scores {Python, SQL, Excel} against a gold
+    of {Python, SQL} exactly as harshly as it scores {cooking}: both are simply "wrong".
+    For a field like required_skills, where the gold itself averages ~3.8 items, that
+    throws away most of the signal -- getting 3 of 4 skills right is not the same as
+    getting none. Per-item micro-averaging is the standard information-extraction
+    treatment and is what aggregate_partial() reports.
+    """
+    g = {v.strip().lower() for v in (gold_value or [])}
+    p = {v.strip().lower() for v in (pred_value or [])}
+    return len(g & p), len(p - g), len(g - p)
+
+
+def aggregate_partial(records: list[tuple[dict, Optional[dict], bool]]) -> dict:
+    """Companion to aggregate(): identical for scalar fields, but list fields get per-item
+    credit instead of all-or-nothing set equality.
+
+    Reported ALONGSIDE the strict numbers, never instead of them -- the strict metric is
+    the honest headline, this one localises *where* a model is partially right. Both
+    models are scored the same way, so this cannot flatter one side.
+    """
+    counts = {f: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for f in FIELDS}
+    fields_correct_total = 0
+
+    for gold, pred, _valid in records:
+        verdicts = score_posting(gold, pred)
+        for field in FIELDS:
+            if field in LIST_FIELDS:
+                gv = _effective_value(field, gold.get(field))
+                pv = _effective_value(field, pred.get(field)) if pred else None
+                if not gv and not pv:
+                    counts[field]["tn"] += 1
+                    continue
+                tp, fp, fn = _list_item_counts(gv, pv)
+                counts[field]["tp"] += tp
+                counts[field]["fp"] += fp
+                counts[field]["fn"] += fn
+            else:
+                counts[field][verdicts[field]] += 1
+        fields_correct_total += sum(1 for v in verdicts.values() if v in ("tp", "tn"))
+
+    per_field = {}
+    for field, c in counts.items():
+        tp, fp, fn = c["tp"], c["fp"], c["fn"]
+        if tp + fp + fn == 0:
+            per_field[field] = {"precision": None, "recall": None, "f1": None, **c}
+            continue
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+        per_field[field] = {"precision": precision, "recall": recall, "f1": f1, **c}
+
+    n = len(records)
+    scored = [pf["f1"] for pf in per_field.values() if pf["f1"] is not None]
+    return {
+        "n_postings": n,
+        "macro_f1_partial": sum(scored) / len(scored) if scored else 0.0,
+        # companion to exact_match_rate: exact-match needs all 14 fields right at once,
+        # so it collapses to 0% the moment one field is systematically wrong.
+        "mean_fields_correct": fields_correct_total / (n * len(FIELDS)) if n else 0.0,
+        "per_field": per_field,
+    }
+
+
 def load_test_set(test_path: Path) -> dict[str, dict]:
     """posting_id -> gold JobPosting dict, from the 'corrected' field that
     label/review_server.py writes to data/test/test.jsonl."""
@@ -342,6 +408,41 @@ def test_field_with_no_signal_excluded_from_macro_f1():
     result = aggregate(records)
     assert result["macro_f1"] == 0.0  # only title has signal, and it's wrong
     assert result["per_field"]["company"]["f1"] is None
+
+
+def test_partial_credit_rewards_overlap_that_strict_calls_wrong():
+    gold = {"title": "x", "required_skills": ["Python", "SQL"]}
+    pred = {"title": "x", "required_skills": ["Python", "SQL", "Excel"]}
+    # strict: one extra item makes the whole field wrong
+    assert score_posting(gold, pred)["required_skills"] == "fp"
+    # partial: 2 of 3 predicted items are right, and both gold items were found
+    r = aggregate_partial([(gold, pred, True)])["per_field"]["required_skills"]
+    assert (r["tp"], r["fp"], r["fn"]) == (2, 1, 0)
+    assert r["recall"] == 1.0 and 0.6 < r["precision"] < 0.7
+
+
+def test_partial_credit_still_punishes_a_fully_wrong_list():
+    gold = {"title": "x", "required_skills": ["Python", "SQL"]}
+    pred = {"title": "x", "required_skills": ["cooking"]}
+    r = aggregate_partial([(gold, pred, True)])["per_field"]["required_skills"]
+    assert (r["tp"], r["fp"], r["fn"]) == (0, 1, 2)
+    assert r["f1"] == 0.0
+
+
+def test_partial_credit_leaves_scalar_fields_identical_to_strict():
+    gold = {"title": "ML Engineer", "company": None}
+    pred = {"title": "Data Scientist", "company": "Made Up Inc"}
+    strict = aggregate([(gold, pred, True)])["per_field"]
+    partial = aggregate_partial([(gold, pred, True)])["per_field"]
+    for f in ("title", "company"):
+        assert {k: strict[f][k] for k in ("tp", "fp", "fn", "tn")} ==                {k: partial[f][k] for k in ("tp", "fp", "fn", "tn")}
+
+
+def test_mean_fields_correct_is_softer_than_exact_match():
+    gold = {"title": "a", "company": "b"}
+    pred = {"title": "a", "company": "WRONG"}
+    assert aggregate([(gold, pred, True)])["exact_match_rate"] == 0.0
+    assert aggregate_partial([(gold, pred, True)])["mean_fields_correct"] > 0.9
 
 
 def test_fields_cover_full_schema():
