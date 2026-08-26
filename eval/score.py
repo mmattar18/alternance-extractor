@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import unicodedata
 import sys
 from pathlib import Path
 from typing import Optional
@@ -65,6 +66,23 @@ _DEPT_PREFIX_RE = re.compile(r"^\s*(?:\d{2,3}|2[ab])\s*-\s*", re.IGNORECASE)
 # null on both sides, rather than requiring every gold row to be hand-blanked.
 _HAS_DIGIT_RE = re.compile(r"\d")
 
+# Case/accent/spacing folding for text comparison. Measured motivation: the fine-tuned
+# model reproduces values that are semantically identical but rendered differently --
+# "MENTON (06)" for "Menton (06)", "GUERANDE" for "Guerande", "Francais: courant" for
+# "Francais : courant" -- because it often copies from an uppercased posting header and
+# does not always preserve accents. Scoring those as extraction failures measures
+# typography, not extraction. 7 of 165 fine-tuned field errors were of exactly this kind
+# and 0 of 93 Groq errors were (Groq copies verbatim), so this corrects a real artifact
+# rather than handing either side free credit -- it is applied identically to both.
+_PUNCT_SPACE_RE = re.compile(r"\s*([:;,/])\s*")
+
+
+def _fold_text(s: str) -> str:
+    s = unicodedata.normalize("NFKD", str(s))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = _PUNCT_SPACE_RE.sub(r"", s)
+    return _WS_RE.sub(" ", s).strip().lower()
+
 
 def _normalize_free_text(s: str) -> str:
     s = s.lower()
@@ -89,13 +107,15 @@ def _effective_value(field: str, value):
 
 def _values_match(field: str, gold_value, pred_value) -> bool:
     if field in LIST_FIELDS:
-        gold_set = {v.strip().lower() for v in (gold_value or [])}
-        pred_set = {v.strip().lower() for v in (pred_value or [])}
+        gold_set = {_fold_text(v) for v in (gold_value or [])}
+        pred_set = {_fold_text(v) for v in (pred_value or [])}
         return gold_set == pred_set
     if field in FREE_TEXT_FIELDS:
         return _normalize_free_text(gold_value) == _normalize_free_text(pred_value)
     if field == "location":
-        return _normalize_location(gold_value) == _normalize_location(pred_value)
+        return _fold_text(_normalize_location(gold_value)) == _fold_text(_normalize_location(pred_value))
+    if field in ("title", "company"):
+        return _fold_text(gold_value) == _fold_text(pred_value)
     return gold_value == pred_value
 
 
@@ -179,8 +199,8 @@ def _list_item_counts(gold_value, pred_value) -> tuple[int, int, int]:
     getting none. Per-item micro-averaging is the standard information-extraction
     treatment and is what aggregate_partial() reports.
     """
-    g = {v.strip().lower() for v in (gold_value or [])}
-    p = {v.strip().lower() for v in (pred_value or [])}
+    g = {_fold_text(v) for v in (gold_value or [])}
+    p = {_fold_text(v) for v in (pred_value or [])}
     return len(g & p), len(p - g), len(g - p)
 
 
