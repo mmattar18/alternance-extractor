@@ -61,14 +61,14 @@ def test_alternance_rhythm_forced_none_when_not_alternance():
 
 
 def test_empty_list_becomes_none_not_empty_list():
-    p = JobPosting(title="x", required_skills=[], nice_to_have_skills=["", "  "])
-    assert p.required_skills is None
-    assert p.nice_to_have_skills is None
+    p = JobPosting(title="x", skills=[], language_requirements=["", "  "])
+    assert p.skills is None
+    assert p.language_requirements is None
 
 
 def test_skill_list_dedupes_case_insensitively():
-    p = JobPosting(title="x", required_skills=["Python", "python", " SQL "])
-    assert p.required_skills == ["Python", "SQL"]
+    p = JobPosting(title="x", skills=["Python", "python", " SQL "])
+    assert p.skills == ["Python", "SQL"]
 
 
 def test_title_is_required():

@@ -41,13 +41,13 @@ PORT = 8765
 TEXT_FIELDS = ["title", "company", "start_date", "location", "education_level",
                "salary_range", "alternance_rhythm"]
 INT_FIELDS = ["duration_months", "years_experience_min"]
-LIST_FIELDS = ["required_skills", "nice_to_have_skills", "language_requirements"]
+LIST_FIELDS = ["skills", "language_requirements"]
 ENUM_FIELDS = {
     "contract_type": ["", "alternance", "stage", "cdi", "cdd", "freelance", "other"],
     "remote_policy": ["", "on_site", "hybrid", "remote"],
 }
 FIELD_ORDER = ["title", "company", "contract_type", "duration_months", "start_date",
-               "location", "remote_policy", "required_skills", "nice_to_have_skills",
+               "location", "remote_policy", "skills",
                "years_experience_min", "education_level", "language_requirements",
                "salary_range", "alternance_rhythm"]
 

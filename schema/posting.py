@@ -131,8 +131,7 @@ class JobPosting(BaseModel):
     start_date: Optional[str] = Field(default=None, description="Start date as written (e.g. 'septembre 2026', 'dès que possible'). null if not stated.")
     location: Optional[str] = Field(default=None, description="City/region as written. null if not stated.")
     remote_policy: Optional[RemotePolicy] = Field(default=None, description="on_site, hybrid, or remote. null if not stated.")
-    required_skills: Optional[list[str]] = Field(default=None, description="Skills explicitly required. null if none are listed.")
-    nice_to_have_skills: Optional[list[str]] = Field(default=None, description="Skills explicitly described as a plus/bonus, not required. null if none.")
+    skills: Optional[list[str]] = Field(default=None, description="All skills, tools, technologies and named competencies the posting states, whether framed as required or as a plus. null if none are stated.")
     years_experience_min: Optional[int] = Field(default=None, ge=0, description="Minimum years of experience. 0 ONLY if the posting explicitly says no experience is required (e.g. 'débutant accepté'). null if experience is not mentioned at all — do not default to 0.")
     education_level: Optional[str] = Field(default=None, description="Required education level as written (e.g. 'Bac+5', 'Master 2'). null if not stated.")
     language_requirements: Optional[list[str]] = Field(default=None, description="Languages required, with level if given (e.g. 'Anglais courant'). null if none stated.")
@@ -145,7 +144,7 @@ class JobPosting(BaseModel):
         """Clean every field the same way before type-specific validation runs."""
         if not isinstance(data, dict):
             return data
-        list_fields = {"required_skills", "nice_to_have_skills", "language_requirements"}
+        list_fields = {"skills", "language_requirements"}
         out = dict(data)
         for key, val in out.items():
             out[key] = _clean_list(val) if key in list_fields else _clean_scalar(val)

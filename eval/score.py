@@ -5,7 +5,7 @@ fine-tuned model) against the hand-corrected test set in data/test/test.jsonl.
 A prediction counts as correct for a field only when presence AND value both
 match the gold record -- this mirrors the binary present/absent + value-match
 simplification documented in schema/posting.py (alternance_rhythm folding).
-List fields (required_skills, nice_to_have_skills, language_requirements) are
+List fields (skills, language_requirements) are
 compared as case-insensitive sets, since order was never part of the schema's
 contract.
 
@@ -40,7 +40,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from schema.posting import JobPosting  # noqa: E402
 
 FIELDS = list(JobPosting.model_fields.keys())
-LIST_FIELDS = {"required_skills", "nice_to_have_skills", "language_requirements"}
+LIST_FIELDS = {"skills", "language_requirements"}
 FREE_TEXT_FIELDS = {"education_level", "salary_range", "start_date", "alternance_rhythm"}
 
 _CONNECTOR_RE = re.compile(r"\b(ou|et|and|or)\b", re.IGNORECASE)
@@ -174,7 +174,7 @@ def _list_item_counts(gold_value, pred_value) -> tuple[int, int, int]:
 
     Exact set equality (what aggregate() uses) scores {Python, SQL, Excel} against a gold
     of {Python, SQL} exactly as harshly as it scores {cooking}: both are simply "wrong".
-    For a field like required_skills, where the gold itself averages ~3.8 items, that
+    For a field like skills, where the gold itself averages several items, that
     throws away most of the signal -- getting 3 of 4 skills right is not the same as
     getting none. Per-item micro-averaging is the standard information-extraction
     treatment and is what aggregate_partial() reports.
@@ -232,52 +232,6 @@ def aggregate_partial(records: list[tuple[dict, Optional[dict], bool]]) -> dict:
         # so it collapses to 0% the moment one field is systematically wrong.
         "mean_fields_correct": fields_correct_total / (n * len(FIELDS)) if n else 0.0,
         "per_field": per_field,
-    }
-
-
-def skills_union_report(records) -> dict:
-    """Diagnostic: score required_skills + nice_to_have_skills as ONE merged set.
-
-    Splitting a skill into "required" vs "nice-to-have" depends on the posting's own
-    framing ("est un plus"), which is often absent or ambiguous, and a model that
-    extracts a skill correctly but files it in the wrong bucket is currently penalised
-    TWICE -- once as a false positive, once as a false negative. Merging isolates the
-    extraction ability from the importance-classification ability.
-
-    This is a RELAXATION and is reported as a clearly-labelled diagnostic, never as the
-    headline: it removes a real sub-task from the schema, so it is not comparable to the
-    per-field numbers. Measured on the Groq baseline it is worth about +0.08 item-F1
-    (required 0.711 -> union 0.791), and it does NOT rescue the field -- even merged it
-    remains the weakest one, because the dominant error is over-generation (fp 91 vs
-    tp 216), not misfiling. Misfiling accounts for 9.2% of gold items and, notably, ran
-    entirely in one direction: 22 gold-required items predicted as nice-to-have, 0 the
-    other way.
-    """
-    def _s(d, f):
-        return {x.strip().lower() for x in (d.get(f) or [])} if d else set()
-
-    tp = fp = fn = 0
-    misfiled_req_as_nice = misfiled_nice_as_req = 0
-    gold_items = 0
-    for gold, pred, _valid in records:
-        gr, gn = _s(gold, "required_skills"), _s(gold, "nice_to_have_skills")
-        pr_, pn = _s(pred, "required_skills"), _s(pred, "nice_to_have_skills")
-        misfiled_req_as_nice += len(gr & pn)
-        misfiled_nice_as_req += len(gn & pr_)
-        g, p = gr | gn, pr_ | pn
-        tp += len(g & p); fp += len(p - g); fn += len(g - p)
-        gold_items += len(g)
-
-    precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall = tp / (tp + fn) if (tp + fn) else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-    misfiled = misfiled_req_as_nice + misfiled_nice_as_req
-    return {
-        "f1": f1, "precision": precision, "recall": recall,
-        "tp": tp, "fp": fp, "fn": fn,
-        "misfiled_required_as_nice": misfiled_req_as_nice,
-        "misfiled_nice_as_required": misfiled_nice_as_req,
-        "misfiled_share_of_gold_items": misfiled / gold_items if gold_items else 0.0,
     }
 
 
@@ -406,15 +360,15 @@ def test_hallucinated_value_where_gold_is_null_is_fp():
 
 
 def test_list_field_matches_as_set_case_insensitive():
-    gold = {"title": "x", "required_skills": ["Python", "SQL"]}
-    pred = {"title": "x", "required_skills": ["sql", "python"]}
-    assert score_posting(gold, pred)["required_skills"] == "tp"
+    gold = {"title": "x", "skills": ["Python", "SQL"]}
+    pred = {"title": "x", "skills": ["sql", "python"]}
+    assert score_posting(gold, pred)["skills"] == "tp"
 
 
 def test_list_field_mismatch_is_fp():
-    gold = {"title": "x", "required_skills": ["Python"]}
-    pred = {"title": "x", "required_skills": ["Python", "SQL"]}
-    assert score_posting(gold, pred)["required_skills"] == "fp"
+    gold = {"title": "x", "skills": ["Python"]}
+    pred = {"title": "x", "skills": ["Python", "SQL"]}
+    assert score_posting(gold, pred)["skills"] == "fp"
 
 
 def test_free_text_field_matches_despite_connector_and_punctuation_differences():
@@ -503,20 +457,20 @@ def test_field_with_no_signal_excluded_from_macro_f1():
 
 
 def test_partial_credit_rewards_overlap_that_strict_calls_wrong():
-    gold = {"title": "x", "required_skills": ["Python", "SQL"]}
-    pred = {"title": "x", "required_skills": ["Python", "SQL", "Excel"]}
+    gold = {"title": "x", "skills": ["Python", "SQL"]}
+    pred = {"title": "x", "skills": ["Python", "SQL", "Excel"]}
     # strict: one extra item makes the whole field wrong
-    assert score_posting(gold, pred)["required_skills"] == "fp"
+    assert score_posting(gold, pred)["skills"] == "fp"
     # partial: 2 of 3 predicted items are right, and both gold items were found
-    r = aggregate_partial([(gold, pred, True)])["per_field"]["required_skills"]
+    r = aggregate_partial([(gold, pred, True)])["per_field"]["skills"]
     assert (r["tp"], r["fp"], r["fn"]) == (2, 1, 0)
     assert r["recall"] == 1.0 and 0.6 < r["precision"] < 0.7
 
 
 def test_partial_credit_still_punishes_a_fully_wrong_list():
-    gold = {"title": "x", "required_skills": ["Python", "SQL"]}
-    pred = {"title": "x", "required_skills": ["cooking"]}
-    r = aggregate_partial([(gold, pred, True)])["per_field"]["required_skills"]
+    gold = {"title": "x", "skills": ["Python", "SQL"]}
+    pred = {"title": "x", "skills": ["cooking"]}
+    r = aggregate_partial([(gold, pred, True)])["per_field"]["skills"]
     assert (r["tp"], r["fp"], r["fn"]) == (0, 1, 2)
     assert r["f1"] == 0.0
 
@@ -553,22 +507,6 @@ def test_paired_bootstrap_detects_a_real_gap_and_ignores_a_null_one():
     assert big["delta"] > 0 and big["significant"], "a total failure vs perfect must register"
     null = paired_bootstrap_delta(good, good, n_boot=200, seed=1)
     assert null["delta"] == 0 and not null["significant"], "identical arms must not look different"
-
-
-def test_skills_union_credits_a_misfiled_skill_but_not_a_missing_one():
-    gold = {"required_skills": ["Python"], "nice_to_have_skills": None}
-    misfiled = {"required_skills": None, "nice_to_have_skills": ["Python"]}
-    missing = {"required_skills": None, "nice_to_have_skills": None}
-    # strict per-field double-penalises the misfile (fp on one field, fn on the other)
-    v = score_posting(gold, misfiled)
-    assert v["required_skills"] == "fn" and v["nice_to_have_skills"] == "fp"
-    # merged: the skill WAS extracted, so it counts, and the misfile is reported
-    u = skills_union_report([(gold, misfiled, True)])
-    assert (u["tp"], u["fp"], u["fn"]) == (1, 0, 0)
-    assert u["misfiled_required_as_nice"] == 1
-    # but a genuinely missing skill is still a miss -- merging must not hide that
-    u2 = skills_union_report([(gold, missing, True)])
-    assert (u2["tp"], u2["fn"]) == (0, 1) and u2["misfiled_required_as_nice"] == 0
 
 
 def test_fields_cover_full_schema():

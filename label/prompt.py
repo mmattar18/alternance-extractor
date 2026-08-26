@@ -34,7 +34,7 @@ Non-negotiable rules:
    - 0 means the posting EXPLICITLY says no experience is required (e.g. "débutant accepté", "no experience necessary").
    - null means experience is simply not mentioned. Do not default a missing mention to 0.
 4. `alternance_rhythm` must be null unless `contract_type` is "alternance" AND the posting states a rhythm.
-5. For list fields (required_skills, nice_to_have_skills, language_requirements): only include items explicitly
+5. For list fields (skills, language_requirements): only include items explicitly
    stated. If none are stated, use null — not an empty list.
 6. Extract values as they are written (e.g. keep "Bac+5", don't normalize to "Master"). Do not translate
    French text to English or vice versa.
@@ -57,8 +57,7 @@ _FEWSHOT_EXAMPLES = [
             "start_date": "septembre 2026",
             "location": "Lyon",
             "remote_policy": "hybrid",
-            "required_skills": ["SQL", "Python", "Power BI"],
-            "nice_to_have_skills": ["dbt"],
+            "skills": ["SQL", "Python", "Power BI", "dbt"],
             "years_experience_min": None,
             "education_level": "Bac+5",
             "language_requirements": None,
@@ -78,8 +77,7 @@ _FEWSHOT_EXAMPLES = [
             "start_date": None,
             "location": "Paris",
             "remote_policy": None,
-            "required_skills": None,
-            "nice_to_have_skills": None,
+            "skills": None,
             "years_experience_min": 0,
             "education_level": None,
             "language_requirements": ["Anglais courant"],
@@ -99,8 +97,7 @@ _FEWSHOT_EXAMPLES = [
             "start_date": None,
             "location": None,
             "remote_policy": None,
-            "required_skills": None,
-            "nice_to_have_skills": None,
+            "skills": None,
             "years_experience_min": None,
             "education_level": "Bac+3",
             "language_requirements": None,
