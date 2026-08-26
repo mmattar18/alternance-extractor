@@ -6,7 +6,7 @@ again; it exists so the debugging already done doesn't get repeated. Companion t
 `LABELLING-NOTES.md` (that one covers the labelling/eval side; this one covers
 training/Kaggle execution).
 
-Last updated: 2026-08-25.
+Last updated: 2026-08-26.
 
 ## THE BIG ONE: loss was computed over the whole sequence, not the answer
 
@@ -133,7 +133,7 @@ cleanup and the loss-scoping fix, so it is a floor, not the headline number.
    `dataset_sources` already points at that dataset slug and picks up the newest version).
 5. Compare against the Run 1 table in `RESULTS.md`.
 
-## Bug history (all four hit in sequence, each only surfaced by actually running it)
+## Bug history (each only surfaced by actually running it)
 
 1. **P100/PyTorch incompatibility.** Kaggle's default GPU assignment gave a Tesla P100
    (compute capability sm_60). The pinned PyTorch build in Kaggle's image only supports
