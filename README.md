@@ -1,17 +1,27 @@
 # alternance-extractor
 
-**Claim:** a small fine-tuned open model (Qwen2.5-1.5B-Instruct + QLoRA) can match a
-large API model (Llama 3.3 70B on Groq) at extracting structured data from job
-postings, at lower latency and lower cost per 1000 requests.
+**Question:** how much of the gap between a small open model and a large API model can
+QLoRA fine-tuning close, on structured extraction from French job postings?
 
-Status: **Data pipeline done, fine-tune not yet run.** Ingest, Groq labelling, the
-100-posting hand-corrected test set, and eval harness are all built and committed.
-`data/train/train.jsonl` (541 rows) has been cleaned up in three rounds — see
-`LABELLING-NOTES.md` for the full history. Groq baseline against the hand-corrected test
-set: `macro_f1 = 0.891`, `exact_match_rate = 34.0%` (see `eval/score.py`). Next and last
-step: run `notebooks/kaggle_train.ipynb` then `notebooks/kaggle_benchmark.ipynb` on Kaggle
-to get the fine-tuned model's numbers — this section gets replaced with the real writeup
-(method, three charts, limitations) once that's done.
+**Answer (measured, see [RESULTS.md](RESULTS.md)):** **73.7%** of it. A QLoRA fine-tune of
+Qwen2.5-1.5B-Instruct on 541 Groq-labelled postings, trained on one free Kaggle T4, scores
+**0.770 macro F1** against a hand-corrected 100-posting test set, versus **0.432** for the
+same model few-shot-prompted and **0.891** for Llama-3.3-70B on Groq.
+
+The remaining 0.121 gap to the 70B model is statistically significant (paired bootstrap
+95% CI [+0.079, +0.173]), so **the fine-tuned model does not match it** -- an earlier
+version of this README claimed it could, and the data does not support that.
+
+On the 90 test postings free of near-duplicate leakage (10% of the test set had a
+near-identical training posting -- see RESULTS.md) the fine-tuned model scores **0.755**,
+and still closes ~72% of the gap.
+
+It beats the 70B model on two fields: `contract_type` (0.986 vs 0.979) and
+`duration_months` (0.850 vs 0.757), the latter because the training labels encode a
+range-handling convention Groq itself does not follow.
+
+Status: pipeline complete end to end. Ingest, labelling, a hand-corrected test set, the
+eval harness, training and benchmark notebooks all run.
 
 ## Repo structure
 
