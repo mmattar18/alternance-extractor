@@ -111,10 +111,16 @@ Two conclusions, both acted on:
 
 ## Current status
 
-**Kernel `mattarmario/alternance-extractor-train` v13 is the live run** -- 3 epochs,
-completion-only loss, cleaned labels. Started ~02:17, expect ~6h (finishing ~08:20).
-v12 (3 epochs but still full-sequence loss) was deliberately killed ~35 min in once the
-loss-scoping bug was found -- it would have burned 6h training at ~6% gradient efficiency.
+**v13 (3 epochs, completion-only loss, cleaned labels) COMPLETED** -- started ~02:17,
+finished ~12:15, so **~10h wall-clock**, well over the ~6h estimated from v10's per-step
+pace. Adapter saved and asserted non-empty (36,981,856 bytes). Log confirms
+`WARNING: this trl build rejects ['warmup_ratio'] -- proceeding without them`: the
+signature-filter added after v11 worked exactly as intended, degrading gracefully and
+visibly instead of killing a 10h run over a non-essential hyperparameter. **So v13 ran
+without warmup** -- if warmup is wanted later, use `warmup_steps` (an int) instead, which
+older SFTConfig builds do accept.
+
+Re-benchmark of v13 in progress.
 
 **Benchmark of the 1-epoch model is DONE** -- see `RESULTS.md` for the full table.
 Headline: Groq macro_f1 **0.891** / exact-match 34.0% vs fine-tuned **0.510** / 0.0%,
