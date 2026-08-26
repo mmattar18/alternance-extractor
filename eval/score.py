@@ -28,6 +28,7 @@ Score a run:          python eval/score.py data/test/test.jsonl data/test/test_c
 from __future__ import annotations
 
 import json
+import random
 import re
 import sys
 from pathlib import Path
@@ -232,6 +233,51 @@ def aggregate_partial(records: list[tuple[dict, Optional[dict], bool]]) -> dict:
         "mean_fields_correct": fields_correct_total / (n * len(FIELDS)) if n else 0.0,
         "per_field": per_field,
     }
+
+
+def bootstrap_ci(records, metric="macro_f1", n_boot=2000, seed=0, alpha=0.05):
+    """Percentile bootstrap CI for a metric, resampling POSTINGS with replacement.
+
+    The test set is 100 postings. Reporting "macro_f1 = 0.891" to three decimals
+    implies a precision that sample size does not support, and a 0.02 gap between two
+    systems on n=100 may be indistinguishable from noise. Resampling postings (the
+    independent unit) is the standard way to attach an interval to that.
+    """
+    rng = random.Random(seed)
+    n = len(records)
+    fn = (lambda r: aggregate(r)[metric]) if metric != "macro_f1_partial"         else (lambda r: aggregate_partial(r)[metric])
+    point = fn(records)
+    draws = []
+    for _ in range(n_boot):
+        sample = [records[rng.randrange(n)] for _ in range(n)]
+        draws.append(fn(sample))
+    draws.sort()
+    lo = draws[int(alpha / 2 * n_boot)]
+    hi = draws[int((1 - alpha / 2) * n_boot)]
+    return {"point": point, "lo": lo, "hi": hi}
+
+
+def paired_bootstrap_delta(records_a, records_b, metric="macro_f1", n_boot=2000, seed=0, alpha=0.05):
+    """CI for (A - B) with the SAME postings resampled for both arms.
+
+    Paired, not two independent CIs: both systems are scored on identical postings, so
+    per-posting difficulty cancels and the interval on the difference is much tighter
+    than eyeballing whether two separate CIs overlap (which is a well-known way to
+    under-detect a real difference). `records_a`/`records_b` must be aligned by posting.
+    """
+    assert len(records_a) == len(records_b)
+    rng = random.Random(seed)
+    n = len(records_a)
+    fn = (lambda r: aggregate(r)[metric]) if metric != "macro_f1_partial"         else (lambda r: aggregate_partial(r)[metric])
+    point = fn(records_a) - fn(records_b)
+    draws = []
+    for _ in range(n_boot):
+        idx = [rng.randrange(n) for _ in range(n)]
+        draws.append(fn([records_a[i] for i in idx]) - fn([records_b[i] for i in idx]))
+    draws.sort()
+    lo = draws[int(alpha / 2 * n_boot)]
+    hi = draws[int((1 - alpha / 2) * n_boot)]
+    return {"delta": point, "lo": lo, "hi": hi, "significant": lo > 0 or hi < 0}
 
 
 def load_test_set(test_path: Path) -> dict[str, dict]:
@@ -443,6 +489,24 @@ def test_mean_fields_correct_is_softer_than_exact_match():
     pred = {"title": "a", "company": "WRONG"}
     assert aggregate([(gold, pred, True)])["exact_match_rate"] == 0.0
     assert aggregate_partial([(gold, pred, True)])["mean_fields_correct"] > 0.9
+
+
+def test_bootstrap_ci_is_deterministic_and_brackets_the_point_estimate():
+    recs = [({"title": "a"}, {"title": "a"}, True)] * 30 +            [({"title": "b"}, {"title": "WRONG"}, True)] * 20
+    a = bootstrap_ci(recs, n_boot=200, seed=7)
+    b = bootstrap_ci(recs, n_boot=200, seed=7)
+    assert a == b, "same seed must reproduce -- a CI nobody can reproduce is not evidence"
+    assert a["lo"] <= a["point"] <= a["hi"]
+
+
+def test_paired_bootstrap_detects_a_real_gap_and_ignores_a_null_one():
+    gold = [({"title": "a", "company": "x"}, None, True) for _ in range(40)]
+    good = [(g, {"title": "a", "company": "x"}, True) for g, _, _ in gold]
+    bad = [(g, {"title": "WRONG", "company": "WRONG"}, True) for g, _, _ in gold]
+    big = paired_bootstrap_delta(good, bad, n_boot=200, seed=1)
+    assert big["delta"] > 0 and big["significant"], "a total failure vs perfect must register"
+    null = paired_bootstrap_delta(good, good, n_boot=200, seed=1)
+    assert null["delta"] == 0 and not null["significant"], "identical arms must not look different"
 
 
 def test_fields_cover_full_schema():
