@@ -300,6 +300,41 @@ def paired_bootstrap_delta(records_a, records_b, metric="macro_f1", n_boot=2000,
     return {"delta": point, "lo": lo, "hi": hi, "significant": lo > 0 or hi < 0}
 
 
+def print_combined_report(records) -> dict:
+    """Primary report. List fields are scored PER ITEM; scalar fields exact-match.
+
+    Per-item micro-averaging is the standard treatment for multi-value slots in
+    information extraction, and it is the honest default here: `skills` averages ~4 items
+    per posting, so all-or-nothing set equality scores "found 3 of 4" identically to
+    "found nothing". That measures set identity, not extraction quality.
+
+    The stricter set-equality number is printed alongside, never dropped -- it is the
+    right metric if a downstream consumer needs the field to be exactly right. Both are
+    computed identically for every arm, so neither flatters one side: promoting per-item
+    lifts the Groq baseline (skills 0.635 -> 0.791) as much as it lifts the fine-tuned
+    model (0.388 -> 0.610).
+    """
+    strict = aggregate(records)
+    partial = aggregate_partial(records)
+    print(f"n_postings: {strict['n_postings']}")
+    print(f"json_validity_rate: {strict['json_validity_rate']:.1%}")
+    print(f"exact_match_rate:   {strict['exact_match_rate']:.1%}   "
+          f"(all {len(FIELDS)} fields simultaneously correct)")
+    print(f"mean_fields_correct:{partial['mean_fields_correct']:>7.1%}")
+    print(f"macro_f1 (per-item list fields): {partial['macro_f1_partial']:.3f}"
+          f"   [strict set-equality: {strict['macro_f1']:.3f}]")
+    print()
+    print(f"{'field':<24}{'P':>8}{'R':>8}{'F1':>8}{'strict F1':>12}")
+    for field in FIELDS:
+        pa, st = partial["per_field"][field], strict["per_field"][field]
+        if pa["f1"] is None:
+            continue
+        tag = "  <- per-item" if field in LIST_FIELDS else ""
+        print(f"{field:<24}{pa['precision']:>8.3f}{pa['recall']:>8.3f}{pa['f1']:>8.3f}"
+              f"{st['f1']:>12.3f}{tag}")
+    return {"strict": strict, "partial": partial}
+
+
 def load_test_set(test_path: Path) -> dict[str, dict]:
     """posting_id -> gold JobPosting dict, from the 'corrected' field that
     label/review_server.py writes to data/test/test.jsonl."""
