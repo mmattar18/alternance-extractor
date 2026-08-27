@@ -1,29 +1,87 @@
 # Results
 
-Three systems scored by `eval/score.py` against the 100-posting hand-corrected test set
+Scored by `eval/score.py` against the 100-posting hand-corrected test set
 (`data/test/test.jsonl`). Reproduce with `notebooks/kaggle_benchmark.ipynb`.
 
 ## Headline
 
-| system | params | macro F1 (95% CI) | exact-match | JSON valid |
+| system | params | prompt tokens | macro F1 | exact-match |
 |---|---|---|---|---|
-| Groq Llama-3.3-70B, few-shot | ~70B | **0.891** [0.860, 0.914] | 34% [25%, 43%] | 100% |
-| Qwen2.5-1.5B **base**, few-shot | 1.5B | 0.432 [0.360, 0.480] | 1% [0%, 3%] | 99% |
-| Qwen2.5-1.5B **fine-tuned** (QLoRA) | 1.5B | **0.770** [0.715, 0.807] | 14% [7%, 21%] | 100% |
+| Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.904** | 36% |
+| Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.471 | 1% |
+| **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.815** | 17% |
 
-**QLoRA fine-tuning closed 73.7% of the gap** between the 1.5B base model and a model
-~47x larger, using 541 training examples on a single free T4.
+Fine-tuning closes **~75% of the gap** between the 1.5B base model and one ~47x larger,
+using 654 training examples on a single free T4 -- while using **fewer prompt tokens than
+either baseline**.
 
-Paired bootstrap on the same postings (2000 resamples):
+## Four training configurations
 
-| comparison | delta macro F1 | 95% CI | significant |
+| arm | epochs | prompt | skills labels | macro F1 |
+|---|---|---|---|---|
+| A | 1 | short (812 tok) | recalibrated | 0.774 |
+| B | 3 | short (812 tok) | recalibrated | **0.815** |
+| C | 3 | **full (2022 tok)** | recalibrated | **0.816** |
+| D | 3 | short (812 tok) | precision-fixed | 0.797 |
+
+**B, C and D are one cluster, not a ranking.** See the noise floor below.
+
+## The noise floor -- read this before comparing any two numbers
+
+Arms B and D differ in **one field's training labels**. Every other field had byte-identical
+data. Yet fields that were never touched moved substantially:
+
+| field | Arm B | Arm D | delta | labels changed |
+|---|---|---|---|---|
+| `language_requirements` | 0.720 | 0.476 | **-0.244** | no |
+| `remote_policy` | 0.842 | 0.900 | +0.058 | no |
+| `skills` | 0.349 | 0.324 | -0.025 | **yes** |
+
+Of the -0.018 macro difference, **-0.016 came from untouched fields** and -0.002 from the
+one that changed. Across the 12 untouched fields: mean |delta| **0.032**, max **0.244**.
+
+**Training stochasticity is therefore ~0.03 macro F1 on this setup, and it is larger than
+most of the effects measured here.** Any single-run difference below ~0.03 is not
+interpretable. The bootstrap CIs reported later cover *test-set sampling only* and do not
+include this second source.
+
+## What survives the noise floor
+
+**1. The short prompt is free.** Arm B (812 tokens) vs Arm C (2022 tokens): **0.815 vs
+0.816**, a difference of 0.001. A 2.5x prompt reduction costs nothing measurable and runs
+18% faster (15.1s vs 18.4s median). Once the model has seen the output shape 654 times, the
+1173-token JSON schema dump is dead weight. It is *not* dead weight for the prompted
+baselines, which have never seen the schema -- this is a fine-tuning-specific saving.
+
+**2. Targeted data fixes starved fields.** `remote_policy` went **0.706 -> 0.842 / 0.900**
+after its training examples tripled (32 -> 101), reproduced across two independent runs and
+far outside the noise band. This validates the starvation diagnosis: Pearson r = **-0.456**
+between per-field training-example count and gap-to-Groq, with sub-150-example fields
+averaging a +0.133 gap against +0.069 for the rest.
+
+**3. Fine-tuning is worth ~0.34 macro F1.** Base 0.471 -> fine-tuned 0.815, paired bootstrap
+on the earlier run **+0.339 [+0.284, +0.406]**, far outside both noise sources.
+
+## What did NOT work
+
+**Two skills-label interventions, in opposite directions, both failed.**
+
+| attempt | train labels | skills F1 | precision |
 |---|---|---|---|
-| fine-tuned - base | **+0.339** | [+0.284, +0.406] | **yes** |
-| Groq - fine-tuned | **+0.121** | [+0.079, +0.173] | **yes** |
+| original cleanup | mean 3.31 items | 0.388 | -- |
+| recalibrated (wider) | mean 4.20 | 0.349 | 0.218 |
+| precision-fixed (tighter, cleaner) | mean 3.95 | 0.324 | 0.210 |
 
-**The fine-tuned model does NOT match the 70B baseline.** The remaining 0.121 gap is
-statistically significant, not noise. The README's original "can match" claim is not
-supported by this evidence and has been corrected.
+Widening the labels and then narrowing them at higher precision (0.754 -> 0.874 measured
+against the gold set's 307 keep/drop decisions) both left precision at **~0.21**, with the
+model emitting skills on **81-87 of 100 postings against gold's 60**.
+
+When two opposite interventions produce the same failure, the variable being adjusted is not
+the cause. The most likely reading is a **capability limit**: at 1.5B with ~650 examples the
+model cannot reliably judge which skills belong, so it lists what it sees. Hand-corrected
+training labels would test that; another regex would not.
+
+`skills` remains the single largest per-field gap to Groq (0.33 vs 0.635).
 
 ## Per-field F1
 
