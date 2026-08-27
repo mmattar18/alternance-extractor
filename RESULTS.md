@@ -83,36 +83,41 @@ training labels would test that; another regex would not.
 
 `skills` remains the single largest per-field gap to Groq (0.33 vs 0.635).
 
-## Per-field F1
+## Per-field F1 (merged 13-field schema)
 
-| field | Groq 70B | base 1.5B | fine-tuned 1.5B |
-|---|---|---|---|
-| title | 1.000 | 0.907 | 0.995 |
-| company | 0.854 | 0.561 | 0.811 |
-| contract_type | 0.979 | 0.621 | **0.986** |
-| duration_months | 0.757 | 0.467 | **0.850** |
-| start_date | 1.000 | 0.148 | 0.870 |
-| location | 0.985 | 0.675 | 0.907 |
-| remote_policy | 0.952 | 0.000 | 0.706 |
-| required_skills | 0.565 | 0.077 | 0.475 |
-| nice_to_have_skills | 0.800 | 0.000 | 0.390 |
-| years_experience_min | 0.857 | 0.533 | 0.842 |
-| education_level | 0.919 | 0.586 | 0.835 |
-| language_requirements | 0.963 | 0.235 | 0.609 |
-| salary_range | 0.923 | 0.632 | 0.783 |
-| alternance_rhythm | 0.923 | 0.600 | 0.727 |
+Groq vs the two 3-epoch arms. B and C differ only in prompt length; treat their per-field
+differences as noise unless they exceed ~0.03.
 
-The fine-tuned model **beats the 70B model** on `contract_type` (0.986 vs 0.979) and
-`duration_months` (0.850 vs 0.757). The second is attributable to label work rather than
-raw model capability: Groq systematically leaves `duration_months` null when a posting
-states a range ("12 a 24 mois"), and the training labels were corrected to a documented
-minimum-of-range convention (see `LABELLING-NOTES.md`). The student learned a rule its
-teacher does not follow.
+| field | Groq 70B | base 1.5B | Arm B (short) | Arm C (full) |
+|---|---|---|---|---|
+| title | 1.000 | 0.907 | 1.000 | 1.000 |
+| company | 0.854 | 0.561 | 0.805 | 0.819 |
+| contract_type | 0.979 | 0.621 | 0.979 | **0.993** |
+| duration_months | 0.757 | 0.467 | **0.930** | **0.905** |
+| start_date | 1.000 | 0.148 | 0.909 | 0.884 |
+| location | 0.985 | 0.675 | 0.936 | 0.947 |
+| remote_policy | 0.952 | 0.000 | 0.842 | 0.900 |
+| **skills** | **0.635** | 0.063 | **0.349** | **0.333** |
+| years_experience_min | 0.857 | 0.533 | 0.842 | 0.842 |
+| education_level | 0.919 | 0.586 | 0.832 | 0.816 |
+| language_requirements | 0.968 | 0.235 | 0.720 | 0.720 |
+| salary_range | 0.923 | 0.632 | 0.727 | 0.727 |
+| alternance_rhythm | 0.923 | 0.600 | 0.727 | 0.727 |
 
-Its weakest fields are the list fields, `required_skills` (0.475) and
-`nice_to_have_skills` (0.390) -- the only fields where it loses badly to Groq.
+The fine-tuned model **beats the 70B** on `contract_type` (0.993 vs 0.979) and
+`duration_months` (0.930 vs 0.757). The second is label work, not model capability: Groq
+systematically returns null when a posting states a duration range ("12 a 24 mois"), and the
+training labels encode a documented minimum-of-range convention (`LABELLING-NOTES.md`). The
+student learned a rule its teacher does not follow.
+
+`skills` is the one field where it loses badly (0.33 vs 0.635) and is the largest single
+contributor to the remaining gap. See "What did NOT work" above.
 
 ## Known bias: near-duplicate test leakage
+
+*Quantified on the earlier v13 run (14-field schema). The leakage itself is a property of
+the data split, not of any particular model, so the ids and the direction of the bias carry
+over unchanged to all later arms.*
 
 France Travail re-lists the same job under a new reference with small edits, which the
 exact `text_hash` check in `schema/dedupe.py` cannot catch. **10 of 100 test postings have
@@ -135,6 +140,9 @@ unchanged: fine-tuning still closes ~72% of the gap on clean data.
 
 ## Alternative metrics (reported for transparency, not as headline)
 
+*Computed on the earlier v13 run, before the schema merge; retained because the
+methodological point stands.*
+
 | system | strict macro F1 | per-item partial | skills merged (union) |
 |---|---|---|---|
 | Groq 70B | 0.891 | 0.895 | 0.791 |
@@ -152,6 +160,9 @@ unchanged: fine-tuning still closes ~72% of the gap on clean data.
   field: the dominant error is over-generation, not misfiling.
 
 ## The abstention problem
+
+*Numbers below are from the earlier 14-field runs; the behaviour persists in every later
+arm (Arm C: skills precision 0.205, emitting on 88 of 100 postings against gold's 60).*
 
 The fine-tuned model characteristic failure is emitting a value where the gold is null.
 On `required_skills` it produces a non-null list for 76/100 postings against gold 49.
