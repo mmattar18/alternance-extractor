@@ -10,6 +10,7 @@ Scored by `eval/score.py` against the 100-posting hand-corrected test set
 | Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.916** | 0.904 | 92.8% |
 | Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.486 | 0.471 | -- |
 | **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.830** | 0.815 | 87.6% |
+| **Qwen2.5-3B fine-tuned (QLoRA)** | **3B** | **812** | **0.856** | 0.838 | 89.2% |
 
 Macro F1 scores list fields (`skills`, `language_requirements`) **per item**, the standard
 treatment for multi-value slots in information extraction; scalar fields stay exact-match.
@@ -26,6 +27,32 @@ them raised Groq at least as much as the fine-tuned model, so leniency never clo
 Fine-tuning closes **~75% of the gap** between the 1.5B base model and one ~47x larger,
 using 654 training examples on a single free T4 -- while using **fewer prompt tokens than
 either baseline**.
+
+## Does model size help? 1.5B vs 3B
+
+Same data, same short prompt, same 3 epochs -- only the base model differs.
+
+| | macro F1 | strict | exact | median latency | fields beating Groq |
+|---|---|---|---|---|---|
+| 1.5B | 0.830 | 0.815 | 17% | 15.1s | 2 |
+| **3B** | **0.856** | 0.838 | 20% | 20.9s | **3** |
+
+**+0.026, which sits at the measured ~0.03 noise floor** -- on the headline number alone this
+is suggestive, not conclusive. It was pre-registered that 3B would need to clear ~0.86 to
+count as a real improvement; it reached 0.856, just under.
+
+What argues it is more than noise: noise moves fields randomly in both directions, but here
+**7 of 13 fields improved, 3 worsened, 3 unchanged**, and several moves are large --
+`alternance_rhythm` +0.11, `salary_range` +0.09, `duration_months` +0.07, and `skills` +0.05
+with precision 0.21 -> 0.275, its first real movement after two failed label interventions.
+
+The 3B beats Groq on three fields (`contract_type` 0.993, `duration_months` 0.978,
+`years_experience_min` 0.870) against the 1.5B's two.
+
+Cost: **39% slower inference** (20.9s vs 15.1s median) and double the memory, for +0.026.
+Whether that trade is worth it depends on the deployment; for a batch pipeline it clearly is,
+for interactive use it is arguable. The 1.5B remains the stronger *headline* -- "1.5B reaches
+90% of a 70B" is a sharper claim than the same for 3B -- so both are reported.
 
 ## Four training configurations
 
