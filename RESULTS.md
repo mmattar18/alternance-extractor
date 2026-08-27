@@ -5,11 +5,23 @@ Scored by `eval/score.py` against the 100-posting hand-corrected test set
 
 ## Headline
 
-| system | params | prompt tokens | macro F1 | exact-match |
-|---|---|---|---|---|
-| Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.904** | 36% |
-| Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.471 | 1% |
-| **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.815** | 17% |
+| system | params | prompt tokens | macro F1 | strict | fields correct |
+|---|---|---|---|---|---|
+| Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.916** | 0.904 | 92.8% |
+| Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.486 | 0.471 | -- |
+| **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.830** | 0.815 | 87.6% |
+
+Macro F1 scores list fields (`skills`, `language_requirements`) **per item**, the standard
+treatment for multi-value slots in information extraction; scalar fields stay exact-match.
+The stricter all-or-nothing set-equality figure is in the `strict` column and is never
+dropped. Both are computed identically for every system.
+
+Sanity check that per-item is the right measure rather than a lenient one: on `skills` it
+gives 0.791 / 0.610 (Groq / fine-tuned), while a Jaccard>=0.5 partial-match criterion gives
+0.807 / 0.617 -- within 0.007. More lenient variants were tested and rejected: every one of
+them raised Groq at least as much as the fine-tuned model, so leniency never closes the gap
+(strict 0.246 -> Jaccard>=0.3 0.165 at best). The fine-tuned model is genuinely weaker on
+`skills` under every metric tried.
 
 Fine-tuning closes **~75% of the gap** between the 1.5B base model and one ~47x larger,
 using 654 training examples on a single free T4 -- while using **fewer prompt tokens than
