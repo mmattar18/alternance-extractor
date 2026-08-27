@@ -70,7 +70,7 @@ Any of those would be a more valuable finding than a number that merely goes up.
 |---|---|---|---|
 | A (1ep, short) | 0.72-0.78 (pt 0.75) | **0.774** | within range |
 | B (3ep, short) | 0.80-0.86 (pt 0.83) | **0.815** | within range |
-| C (3ep, full) | within +/-0.02 of B | pending | |
+| C (3ep, full) | within +/-0.02 of B | **0.816** | correct -- differs by 0.001 |
 
 Headline predictions landed. The sub-predictions, which actually tested the diagnosis,
 split -- one confirmed, one clearly wrong.
@@ -162,3 +162,24 @@ skills on 81-87 of 100 postings against gold's 60. Label convention does not app
 the lever. The more likely reading is that the model cannot reliably decide which skills
 belong, and lists what it sees -- a capability limit at 1.5B with ~650 examples, not a
 labelling artifact. Hand-corrected training labels would test that; another regex will not.
+
+
+## Arm C: the prompt question, answered
+
+| | prompt tokens (median) | macro F1 | median latency |
+|---|---|---|---|
+| Arm B, short prompt | **812** | 0.815 | 15.1s |
+| Arm C, full prompt | 2022 | 0.816 | 18.4s |
+
+**A 2.5x prompt reduction costs 0.001 macro F1** -- far inside the ~0.03 noise floor measured
+from the B/D comparison. Predicted "within +/-0.02"; observed 0.001.
+
+The 1173-token JSON schema dump is dead weight once the model has seen the output shape 654
+times in training. It is NOT dead weight for the prompted baselines, which have never seen
+the schema and genuinely need it -- so this is a fine-tuning-specific saving, and it is the
+concrete basis for a cost-per-request argument: 812 tokens against Groq's ~2156, on top of
+the 47x parameter difference.
+
+Worth noting the shape of the win: the accuracy is identical, the saving is entirely in
+serving cost and latency. That is a more defensible claim than a quality improvement,
+because it sits well outside the noise band rather than inside it.
