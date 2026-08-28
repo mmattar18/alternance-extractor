@@ -47,27 +47,33 @@ from fetch import build_record, MIN_DESCRIPTION_CHARS  # noqa: E402
 
 EXISTING_PATH = REPO_ROOT / "data" / "raw" / "postings.jsonl"
 TEST_PATH = REPO_ROOT / "data" / "test" / "test.jsonl"
-OUTPUT_PATH = REPO_ROOT / "data" / "raw" / "postings_v2.jsonl"
+OUTPUT_PATH = REPO_ROOT / "data" / "raw" / "postings_v3.jsonl"
 
 # Conservative on purpose: cheaper to discard a usable posting than to poison the test set.
 NEAR_DUP_THRESHOLD = 0.35
 
 # (bucket, keyword, cap). Keywords chosen to surface the ATTRIBUTE, not the role.
 KEYWORD_PLAN: list[tuple[str, str, int | None]] = [
-    # remote_policy (32 examples today -- the most starved)
-    ("remote_enriched", "alternance teletravail", 120),
-    ("remote_enriched", "alternance hybride", 80),
-    ("remote_enriched", "apprentissage teletravail partiel", 80),
-    # language_requirements (57) -- biggest single gap at +0.296
-    ("language_enriched", "alternance anglais courant", 120),
-    ("language_enriched", "alternance bilingue", 80),
-    ("language_enriched", "apprentissage anglais professionnel", 80),
-    # alternance_rhythm (47)
-    ("rhythm_enriched", "alternance rythme semaine entreprise", 100),
-    ("rhythm_enriched", "apprentissage 3 semaines entreprise 1 semaine ecole", 80),
-    # salary_range (49)
-    ("salary_enriched", "alternance remuneration euros", 100),
-    ("salary_enriched", "apprentissage salaire brut mensuel", 80),
+    # Round 2 targets, chosen from the 3B model's per-field gap to Groq. Long multi-word
+    # queries returned nothing in round 1 -- France Travail's search clearly prefers short
+    # ones -- so these are one or two words.
+    #
+    # language_requirements is the priority: only 70 training examples and the single
+    # largest remaining gap (0.667 vs Groq 0.968 = 0.301, worth +0.023 macro alone).
+    ("language_enriched", "anglais", 200),
+    ("language_enriched", "bilingue", 150),
+    ("language_enriched", "anglais courant", 120),
+    ("language_enriched", "espagnol", 80),
+    ("language_enriched", "allemand", 60),
+    # start_date -- 0.810 vs Groq 1.000, gap 0.190
+    ("startdate_enriched", "rentree", 100),
+    ("startdate_enriched", "septembre", 100),
+    # salary_range -- 84 examples, gap 0.105
+    ("salary_enriched", "remuneration", 100),
+    ("salary_enriched", "salaire", 100),
+    # alternance_rhythm -- 76 examples, gap 0.090
+    ("rhythm_enriched", "rythme", 100),
+    ("rhythm_enriched", "semaine ecole", 80),
 ]
 
 
