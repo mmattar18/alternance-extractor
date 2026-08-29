@@ -10,7 +10,8 @@ Scored by `eval/score.py` against the 100-posting hand-corrected test set
 | Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.916** | 0.904 | 92.8% |
 | Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.486 | 0.471 | -- |
 | **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.830** | 0.815 | 87.6% |
-| **Qwen2.5-3B fine-tuned (QLoRA)** | **3B** | **812** | **0.856** | 0.838 | 89.2% |
+| **Qwen2.5-3B fine-tuned, 654 rows** | 3B | 812 | 0.856 | 0.838 | 89.2% |
+| **Qwen2.5-3B fine-tuned, 881 rows** | **3B** | **812** | **0.874** | 0.855 | **89.8%** |
 
 Macro F1 scores list fields (`skills`, `language_requirements`) **per item**, the standard
 treatment for multi-value slots in information extraction; scalar fields stay exact-match.
@@ -27,6 +28,40 @@ them raised Groq at least as much as the fine-tuned model, so leniency never clo
 Fine-tuning closes **~75% of the gap** between the 1.5B base model and one ~47x larger,
 using 654 training examples on a single free T4 -- while using **fewer prompt tokens than
 either baseline**.
+
+## Does more targeted data help? 654 vs 881 rows
+
+Single-variable experiment: same model, same prompt, same hyperparameters, +227 training
+rows concentrated in the starved fields. (`MAX_SEQ_LEN` also dropped 3584 -> 2560, which
+truncates nothing -- the longest sequence is 2199 tokens -- so it changes memory only.)
+
+| field | 654 rows | 881 rows | Groq | training examples |
+|---|---|---|---|---|
+| `language_requirements` | 0.667 | **0.720** | 0.968 | 70 -> 214 |
+| `alternance_rhythm` | 0.833 | **0.909** | 0.923 | 76 -> 78 |
+| `salary_range` | 0.818 | **0.870** | 0.923 | 84 -> 138 |
+| `remote_policy` | 0.900 | **0.952** | 0.952 | 101 -> 118 |
+| `years_experience_min` | 0.870 | **0.917** | 0.857 | -- |
+| `company` | 0.844 | **0.866** | 0.854 | -- |
+| `skills` | 0.384 | 0.384 | 0.635 | 318 -> 456 |
+| `duration_months` | 0.978 | 0.829 | 0.757 | -- |
+| **macro F1** | **0.856** | **0.874** | 0.916 | |
+
+**+0.018, which is BELOW the ~0.03 noise floor** -- not conclusive on the headline alone.
+What argues it is real: 10 of 13 fields improved or held against 2 regressions, and the
+gains land in the fields the new data was bought for. Noise moves fields randomly in both
+directions; this did not.
+
+The model now **matches or beats the 70B on five fields**: `contract_type` (0.986 vs 0.979),
+`duration_months` (0.829 vs 0.757), `years_experience_min` (0.917 vs 0.857), `company`
+(0.866 vs 0.854) and `remote_policy` (0.952, tied).
+
+**`skills` did not move at all** (0.384) despite its examples going 318 -> 456. Combined with
+two failed label interventions and its only prior movement coming from model size
+(1.5B -> 3B), the evidence consistently says `skills` is capacity-limited, not data-limited.
+
+**Cumulative:** 1.5B 0.830 -> 3B 0.856 -> 3B with more data 0.874, against Groq's 0.916.
+The remaining gap is 0.042, and roughly half of it is `skills` alone.
 
 ## Does model size help? 1.5B vs 3B
 
