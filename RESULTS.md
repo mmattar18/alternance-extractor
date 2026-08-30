@@ -11,7 +11,7 @@ Scored by `eval/score.py` against the 100-posting hand-corrected test set
 | Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.486 | 0.471 | -- |
 | **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.830** | 0.815 | 87.6% |
 | **Qwen2.5-3B fine-tuned, 654 rows** | 3B | 812 | 0.856 | 0.838 | 89.2% |
-| **Qwen2.5-3B fine-tuned, 881 rows** | **3B** | **812** | **0.874** | 0.855 | **89.8%** |
+| **Qwen2.5-3B fine-tuned, 881 rows** | **3B** | **812** | **0.877 +/- 0.003** | 0.861 | **89.8%** |
 
 Macro F1 scores list fields (`skills`, `language_requirements`) **per item**, the standard
 treatment for multi-value slots in information extraction; scalar fields stay exact-match.
@@ -100,26 +100,58 @@ for interactive use it is arguable. The 1.5B remains the stronger *headline* -- 
 
 **B, C and D are one cluster, not a ranking.** See the noise floor below.
 
-## The noise floor -- read this before comparing any two numbers
+## Measured variance: 3 seeds, identical config
 
-Arms B and D differ in **one field's training labels**. Every other field had byte-identical
-data. Yet fields that were never touched moved substantially:
+Three runs of the same configuration (3B, 881 rows, short prompt, 3 epochs) differing only
+in `SEED`, which controls both the train/eval split and training randomness -- so this is
+full-pipeline variance ("if I reran this end to end, what would I get?").
 
-| field | Arm B | Arm D | delta | labels changed |
-|---|---|---|---|---|
-| `language_requirements` | 0.720 | 0.476 | **-0.244** | no |
-| `remote_policy` | 0.842 | 0.900 | +0.058 | no |
-| `skills` | 0.349 | 0.324 | -0.025 | **yes** |
+| seed | macro F1 | strict | exact-match |
+|---|---|---|---|
+| 42 | 0.874 | 0.855 | 19% |
+| 43 | 0.879 | 0.864 | 23% |
+| 44 | 0.878 | 0.863 | 24% |
+| **mean** | **0.877 +/- 0.003** | 0.861 +/- 0.005 | 22% +/- 2.6% |
 
-Of the -0.018 macro difference, **-0.016 came from untouched fields** and -0.002 from the
-one that changed. Across the 12 untouched fields: mean |delta| **0.032**, max **0.244**.
+**Macro sd = 0.0026** (range 0.005). With 2sd = 0.005 as the threshold:
 
-**Training stochasticity is therefore ~0.03 macro F1 on this setup, and it is larger than
-most of the effects measured here.** Any single-run difference below ~0.03 is not
-interpretable. The bootstrap CIs reported later cover *test-set sampling only* and do not
-include this second source.
+| claim | delta | verdict |
+|---|---|---|
+| more data, 654 -> 881 rows | +0.018 | **real** |
+| 3B vs 1.5B | +0.026 | **real** |
+| short vs full prompt | +0.001 | within noise |
 
-## What survives the noise floor
+### Correcting an earlier error in this document
+
+Previous versions of this file reported a **~0.03 noise floor** and used it to withdraw the
+"more data helped" and "3B beat 1.5B" claims. **That estimate was wrong.** It came from a
+single pair of runs (Arms B and D) in which `language_requirements` happened to swing 0.244,
+and one unlucky field on one comparison was generalised into a macro-level noise figure.
+Measured properly across three seeds, macro variance is an order of magnitude smaller and
+both claims stand.
+
+The lesson is not that caution was misplaced -- it is that a noise floor inferred from one
+accidental comparison is itself a single noisy measurement, and was treated with more
+confidence than it earned.
+
+### Per-field variance is real and much larger
+
+With byte-identical training data, individual fields move far more than the macro:
+
+| field | range across the 3 seeds |
+|---|---|
+| `duration_months` | 0.126 |
+| `years_experience_min` | 0.083 |
+| `alternance_rhythm` | 0.076 |
+| `language_requirements` | 0.053 |
+| `remote_policy` | 0.048 |
+| `skills` | 0.043 |
+
+The macro is stable *because* these cancel. **Per-field claims need multiple seeds; macro
+claims do not.** Any single-run per-field comparison in this document below ~0.1 should be
+read as indicative only.
+
+## What survives the noise floor## What survives the noise floor
 
 **1. The short prompt is free.** Arm B (812 tokens) vs Arm C (2022 tokens): **0.815 vs
 0.816**, a difference of 0.001. A 2.5x prompt reduction costs nothing measurable and runs
