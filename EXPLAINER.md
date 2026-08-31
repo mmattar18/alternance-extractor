@@ -30,17 +30,18 @@ to run on your own hardware.
 one. They're private, free to run, and yours permanently. The catch is that out of the box
 they're *bad* at this. Ask a small model to fill in the table and it produces a mess.
 
-**The question this project asks:** if you take a small model and *train* it on examples of
-the job done correctly, how much of that gap can you close?
+**The question this project asks:** how small can the model you own be, and still get most
+of the way to the big rented one?
 
 An analogy: the large model is an expensive consultant who's brilliant immediately but bills
 every phone call. The small model is a junior hire who's useless on day one -- but you can
-train them, and afterwards they work for free, forever. The question is how good the junior
-gets.
+train them, and afterwards they work for free, forever. The question isn't just whether
+training works. It's *how junior you can go* -- how small a hire still does the job well
+enough -- because the smaller they are, the cheaper they are to keep.
 
 ## What we did
 
-**1. Collected the raw material.** ~770 real job postings pulled from the French national
+**1. Collected the raw material.** ~1550 real job postings pulled from the French national
 employment service.
 
 **2. Created an answer key.** 100 postings were corrected *by hand*, field by field, to say
@@ -48,27 +49,38 @@ exactly what the correct table row should be. This is the yardstick -- without i
 no way to tell whether the model is right, only whether it sounds confident. Building it
 took the largest share of the effort, and it's the part most projects skip.
 
-**3. Trained the junior.** The remaining ~650 postings became lessons. The large model
-produced a first-pass table for each, those were cleaned up, and the small model studied
-them repeatedly -- like a trainee working through hundreds of solved exercises.
+**3. Trained the juniors.** 881 postings became lessons. The large model produced a
+first-pass table for each, those were cleaned up, and the small models studied them
+repeatedly -- like a trainee working through hundreds of solved exercises.
 
-**4. Graded everyone against the same answer key.** Three contestants: the large rented
-model, the small model *before* training, and the small model *after* training. All marked
-on the same 100 hand-corrected postings.
+**4. Graded everyone against the same answer key**, at two different sizes, so the result is
+a *curve* rather than a single number. All marked on the same 100 hand-corrected postings.
 
 ## What we found
 
-| | size | score |
-|---|---|---|
-| Large rented model | ~70 billion settings | **0.92** |
-| Small model, untrained | 1.5 billion | 0.49 |
-| **Small model, after training** | 1.5 billion | **0.83** |
+| | size | score | share of the big model's quality |
+|---|---|---|---|
+| Small model, untrained | 1.5 billion | 0.49 | 53% |
+| Small model, trained | 1.5 billion | 0.83 | 91% |
+| **Bigger small model, trained** | **3 billion** | **0.88** | **96%** |
+| Large rented model | ~70 billion | 0.92 | 100% |
 
-Reading the score: 1.00 would be a perfect match with the hand-corrected answer key. Roughly,
-the trained small model gets **about 88% of individual fields right**.
+Reading the score: 1.00 would be a perfect match with the hand-corrected answer key.
 
-**Training closed about three quarters of the gap** -- using a model roughly **47 times
-smaller**, on a free graphics card, in a few hours.
+Two things stand out, and the second is the more useful one.
+
+**Training does the heavy lifting.** It takes the small model from 53% to 91% of the big
+one's quality -- on a free graphics card, in a few hours.
+
+**Then it stops paying.** Doubling the model from 1.5 to 3 billion adds only another 5
+points, and the last 4% didn't move at all: not for 43% more training data, not for two
+different attempts at fixing the training examples. The gains come fast and then flatten,
+which means **you don't need a big model here -- 3 billion settings, 23 times smaller than
+the rented one, gets you 96% of the way.**
+
+The obvious next step -- a 7-billion model -- doesn't fit on the free hardware. So 3 billion
+is the honest end of this particular curve, not a claim about where it would flatten with a
+bigger budget.
 
 It also turned out **cheaper per request than expected**. A rented model needs the whole
 table format explained to it every single time, which costs money proportional to text
@@ -85,9 +97,13 @@ record 12. The student learned a convention its teacher never had.
 
 The trained model is still clearly worse at **listing required skills**. It over-lists --
 naming skills the posting never mentions. Two separate attempts to fix this by adjusting the
-training examples both failed, in opposite directions. The evidence points at a genuine
-capability limit rather than a fixable data problem: at this size, with this many examples,
-the model can't reliably judge which skills belong.
+training examples both failed, in opposite directions, and more data didn't help either.
+
+The one thing that *did* move it was making the model bigger. That's the clearest evidence in
+the project for where the size limit actually bites: this column isn't a labelling problem
+you can fix with better examples, it's a judgement the small model can't reliably make. It's
+also about half of the entire remaining gap -- so if you wanted the last 4%, this is the one
+thing you'd have to buy a bigger model for.
 
 We also discovered two problems in our *own* method and reported both:
 
@@ -102,14 +118,17 @@ We also discovered two problems in our *own* method and reported both:
 Both of these make the headline number *less* impressive. They're in the report because a
 result you can't trust isn't worth having.
 
-## Why the answer is useful either way
+## The answer, and why it's useful
 
-The original hypothesis was that a small trained model could **match** the large rented one.
-It doesn't -- the remaining gap is real, not noise, and the report says so.
+**It does not match the big model.** The remaining 4% is real, not measurement noise -- we
+re-ran the training three times to check exactly that -- and it's mostly the skills column.
 
-But the practical finding stands: **a model 47 times smaller, running free on hardware you
-control, reaches about 90% of the quality of a rented one, with cheaper requests.** For
-plenty of real uses -- filtering, first-pass sorting, anything where a human reviews the
-output anyway -- that trade is clearly worth making. For uses needing top accuracy, it isn't.
+But that wasn't quite the question. The question was how small you can go, and the answer is
+concrete: **3 billion settings, 23 times smaller, running free on hardware you control,
+reaching 96% of a rented model's quality on cheaper requests.**
+
+Whether that's a good trade depends entirely on the use. For filtering, first-pass sorting,
+or anything a human reviews anyway, 96% at zero marginal cost is obviously worth it. For
+something where the last 4% matters and nobody checks the output, it isn't.
 
 Knowing *which* case you're in, with numbers behind it, is the actual deliverable.

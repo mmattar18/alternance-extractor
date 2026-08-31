@@ -1,17 +1,24 @@
 # Results
 
+**Question: how small a model gets you most of the way to a 70B?**
+
 Scored by `eval/score.py` against the 100-posting hand-corrected test set
 (`data/test/test.jsonl`). Reproduce with `notebooks/kaggle_benchmark.ipynb`.
 
 ## Headline
 
-| system | params | prompt tokens | macro F1 | strict | fields correct |
-|---|---|---|---|---|---|
-| Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.916** | 0.904 | 92.8% |
-| Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.486 | 0.471 | -- |
-| **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.830** | 0.815 | 87.6% |
-| **Qwen2.5-3B fine-tuned, 654 rows** | 3B | 812 | 0.856 | 0.838 | 89.2% |
-| **Qwen2.5-3B fine-tuned, 881 rows** | **3B** | **812** | **0.877 +/- 0.003** | 0.861 | **89.8%** |
+| system | params | prompt tokens | macro F1 | % of Groq | strict | fields correct |
+|---|---|---|---|---|---|---|
+| Qwen2.5-1.5B base, few-shot | 1.5B | 2718 | 0.486 | 53% | 0.471 | -- |
+| **Qwen2.5-1.5B fine-tuned (QLoRA)** | **1.5B** | **812** | **0.830** | 91% | 0.815 | 87.6% |
+| **Qwen2.5-3B fine-tuned, 654 rows** | 3B | 812 | 0.856 | 93% | 0.838 | 89.2% |
+| **Qwen2.5-3B fine-tuned, 881 rows** | **3B** | **812** | **0.877 +/- 0.003** | **96%** | 0.861 | **89.8%** |
+| Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | **0.916** | 100% | 0.904 | 92.8% |
+
+**The curve flattens fast.** Fine-tuning the 1.5B buys +0.344. Doubling to 3B buys +0.047.
+The last 0.039 is not bought by either lever tried: it survives a 43% data increase and is
+roughly half `skills` alone. 7B would be the next point on the curve and does not fit on a
+16GB T4 (see `TRAINING-NOTES.md`), so 3B is where this hardware budget stops.
 
 Macro F1 scores list fields (`skills`, `language_requirements`) **per item**, the standard
 treatment for multi-value slots in information extraction; scalar fields stay exact-match.
@@ -25,9 +32,10 @@ them raised Groq at least as much as the fine-tuned model, so leniency never clo
 (strict 0.246 -> Jaccard>=0.3 0.165 at best). The fine-tuned model is genuinely weaker on
 `skills` under every metric tried.
 
-Fine-tuning closes **~75% of the gap** between the 1.5B base model and one ~47x larger,
-using 654 training examples on a single free T4 -- while using **fewer prompt tokens than
-either baseline**.
+**Answer to the headline question: 3B reaches 96% of the 70B's macro F1 at 1/23rd the
+parameters and 1/2.6th the prompt cost**, trained on 881 examples on a single free T4.
+It does **not** match it -- the residual 0.039 is significant against a measured seed
+variance of sigma = 0.003 (n=3, below).
 
 ## Does more targeted data help? 654 vs 881 rows
 
@@ -300,7 +308,7 @@ Two honest observations that do hold:
 
 - The fine-tuned model needs **2102 median prompt tokens vs 2718** for the few-shot base
   (-23%), because fine-tuning replaces the in-context examples. That is the real basis for
-  a cost-per-request argument, and it compounds with the 47x parameter difference.
+  a cost-per-request argument, and it compounds with the 23x parameter difference.
 - It is *slower* than its own base model (17.72s vs 12.48s) despite the shorter prompt,
   because the LoRA adapter is unmerged and adds per-token overhead. `merge_and_unload()`
   before inference would likely recover most of that. Not yet measured.

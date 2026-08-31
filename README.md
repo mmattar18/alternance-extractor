@@ -1,34 +1,65 @@
 # alternance-extractor
 
-**Question:** how much of the gap between a small open model and a large API model can
-QLoRA fine-tuning close, on structured extraction from French job postings?
+**How small a model gets you most of the way to a 70B?**
 
-**Answer (measured, see [RESULTS.md](RESULTS.md)):** **73.7%** of it. A QLoRA fine-tune of
-Qwen2.5-1.5B-Instruct on 541 Groq-labelled postings, trained on one free Kaggle T4, scores
-**0.770 macro F1** against a hand-corrected 100-posting test set, versus **0.432** for the
-same model few-shot-prompted and **0.891** for Llama-3.3-70B on Groq.
+Structured extraction from French job postings — turning free-text listings into a fixed
+13-field schema (title, company, contract type, duration, skills, salary...). The question
+is how far a small open model you run yourself can close the gap to a large rented one.
 
-The remaining 0.121 gap to the 70B model is statistically significant (paired bootstrap
-95% CI [+0.079, +0.173]), so **the fine-tuned model does not match it** -- an earlier
-version of this README claimed it could, and the data does not support that.
+## The scaling curve
 
-On the 90 test postings free of near-duplicate leakage (10% of the test set had a
-near-identical training posting -- see RESULTS.md) the fine-tuned model scores **0.755**,
-and still closes ~72% of the gap.
+Every system scored by `eval/score.py` against the same 100-posting hand-corrected test set:
 
-It beats the 70B model on two fields: `contract_type` (0.986 vs 0.979) and
-`duration_months` (0.850 vs 0.757), the latter because the training labels encode a
-range-handling convention Groq itself does not follow.
+| system | params | prompt tokens | macro F1 | % of Groq |
+|---|---|---|---|---|
+| Qwen2.5-1.5B, few-shot (untrained) | 1.5B | 2718 | 0.486 | 53% |
+| Qwen2.5-1.5B + QLoRA | 1.5B | 812 | 0.830 | 91% |
+| **Qwen2.5-3B + QLoRA** | **3B** | **812** | **0.877 ± 0.003** | **96%** |
+| Groq Llama-3.3-70B, few-shot | ~70B | ~2156 | 0.916 | 100% |
 
-Status: pipeline complete end to end. Ingest, labelling, a hand-corrected test set, the
-eval harness, training and benchmark notebooks all run.
+**A 3B model reaches 96% of a 70B's quality at 1/23rd the parameters and 1/2.6th the prompt
+cost**, trained on 881 examples on a free Kaggle T4. The curve flattens sharply: fine-tuning
+buys +0.344, the 1.5B→3B step buys +0.047, and the remaining 0.039 is concentrated in a
+single field.
+
+**It does not match the 70B.** The remaining gap is statistically significant against a
+measured seed variance of σ = 0.003 (n=3), and roughly half of it is the `skills` field
+alone (0.42 vs 0.635).
+
+## Where the last 4% lives
+
+`skills` resisted every intervention tried: two label-convention rewrites in opposite
+directions, a 43% increase in its training examples, and inference-time filtering. It moved
+only once — when the model doubled in size. That is the signature of a capacity limit rather
+than a data or labelling problem, and it is why the honest answer to "how small can you go"
+is *3B for 96%, and something larger for the rest*.
+
+Qwen2.5-7B was attempted and does not fit: on a 16GB T4 it CPU-offloads and logs zero
+training steps in 12 hours. See `TRAINING-NOTES.md`.
+
+## What makes the numbers trustworthy
+
+- **Hand-corrected gold set** — 100 postings corrected field by field, the yardstick everything
+  is measured against
+- **Near-duplicate test leakage found and disclosed** — 10% of the test set had a near-identical
+  twin in training (France Travail re-lists jobs under new reference numbers); leak-free scores
+  are reported alongside
+- **Seed variance measured** (n=3, σ = 0.003) rather than assumed — and it corrected an earlier
+  error in this repo where a noise floor inferred from one accidental comparison was ~10x too
+  large, causing two valid findings to be wrongly withdrawn
+- **Predictions pre-registered** before each run, with the misses left in (`PREDICTIONS.md`)
+- **Prompt-length ablation** — the 1173-token JSON schema dump is dead weight after fine-tuning:
+  0.815 vs 0.816 at 2.5x fewer tokens
+
+Full results and limitations: [RESULTS.md](RESULTS.md). Plain-language walkthrough:
+[EXPLAINER.md](EXPLAINER.md).
 
 ## Repo structure
 
 - `schema/` — locked Pydantic schema + validator (`posting.py`), dedupe/leakage
   helpers (`dedupe.py`)
 - `ingest/` — API clients / fetchers, cleaning, dedupe, PII stripping
-- `data/` — raw postings, Groq-labelled train set (541 rows), hand-corrected test set
+- `data/` — raw postings, Groq-labelled train set (881 rows), hand-corrected test set
   (100 rows)
 - `label/` — Groq/Gemini/OpenRouter/Cerebras labelling clients + baseline prompt, plus
   `review_server.py` (the hand-correction UI) and `select_test_set.py` (the train/test split)
